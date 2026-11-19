@@ -5,6 +5,7 @@
  * animation frame, with a guaranteed final send.
  */
 import type { AppState, BusId, BusState, CompParams, DeviceInfo, EqParams, GateParams, LimiterParams, StripState } from "../types";
+import { MAX_BUS_DELAY_MS } from "../types";
 import { ipc, type Target } from "../ipc";
 import { ingestFrame } from "./meters";
 
@@ -149,6 +150,16 @@ class MixerStore {
     const b = this.bus(bus);
     if (b) b.limiter = params;
     void ipc.setLimiterParams(bus, params);
+  }
+
+  /** Whole milliseconds: finer than that is inaudible for device sync, and
+   *  it keeps the knob, the readout and the saved profile in agreement. */
+  setBusDelay(bus: BusId, ms: number): void {
+    const v = Math.round(Math.min(MAX_BUS_DELAY_MS, Math.max(0, ms)));
+    const b = this.bus(bus);
+    if (!b || b.delayMs === v) return;
+    b.delayMs = v;
+    void ipc.setBusDelay(bus, v);
   }
 
   setStripDevice(stripId: number, hwKey: string): void {

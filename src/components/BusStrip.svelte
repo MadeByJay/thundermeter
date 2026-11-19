@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { BusState } from "../lib/types";
+  import { MAX_BUS_DELAY_MS } from "../lib/types";
   import { mixer } from "../lib/state/mixer.svelte";
   import StripHeader from "./StripHeader.svelte";
   import Meter from "./Meter.svelte";
@@ -61,6 +62,15 @@
       enabled={bus.limiter.enabled}
       onchange={(v) => mixer.setLimiterParams(bus.id, { ...bus.limiter, thresholdDb: v, enabled: true })}
       onenabledchange={(on) => mixer.setLimiterParams(bus.id, { ...bus.limiter, enabled: on })}
+    />
+    <Knob
+      label="DLY"
+      min={0}
+      max={MAX_BUS_DELAY_MS}
+      value={bus.delayMs}
+      defaultValue={0}
+      fmt={(v) => `${Math.round(v)} ms`}
+      onchange={(v) => mixer.setBusDelay(bus.id, v)}
     />
   </div>
 

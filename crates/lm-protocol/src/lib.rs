@@ -181,6 +181,10 @@ impl StripState {
     }
 }
 
+/// Upper bound of a bus's output delay. The filter-chain allocates its delay
+/// line for this length up front, so raising it costs memory on every bus.
+pub const MAX_BUS_DELAY_MS: f32 = 500.0;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BusState {
@@ -192,6 +196,11 @@ pub struct BusState {
     pub gain_db: f32,
     pub mute: bool,
     pub limiter: LimiterParams,
+    /// Post-limiter output delay, for lining up devices with different
+    /// latency (VoiceMeeter's per-bus delay). `default` so profiles written
+    /// before it existed still load, at 0.
+    #[serde(default)]
+    pub delay_ms: f32,
 }
 
 impl BusState {
@@ -264,6 +273,8 @@ pub enum EngineCommand {
     SetCompParams { strip: StripId, params: CompParams },
     SetEqParams { strip: StripId, params: EqParams },
     SetLimiterParams { bus: BusId, params: LimiterParams },
+    /// Delay a bus's output by `ms` (clamped to `0..=MAX_BUS_DELAY_MS`).
+    SetBusDelay { bus: BusId, ms: f32 },
     /// Point a hardware strip at a different capture device (module reload).
     SetStripDevice { strip: StripId, hw_key: String },
     /// Point an A-bus at a different output device (module reload).
@@ -317,6 +328,7 @@ mod tests {
             gain_db: 0.0,
             mute: false,
             limiter: LimiterParams::default(),
+            delay_ms: 0.0,
         }
     }
 
@@ -409,6 +421,7 @@ mod tests {
             assert!(s.get(key).is_some(), "strip is missing {key}");
         }
         assert!(json["buses"][0].get("targetHwKey").is_some());
+        assert!(json["buses"][0].get("delayMs").is_some());
         assert!(json["devices"][0].get("nodeName").is_some());
         assert!(json["devices"][0].get("mediaClass").is_some());
     }
@@ -457,6 +470,7 @@ mod tests {
             EngineCommand::SetGain { target: Target::Strip { strip: 1 }, db: -6.0 },
             EngineCommand::SetRoute { strip: 1, bus: BusId::B1, on: true },
             EngineCommand::SetEqParams { strip: 2, params: EqParams::default() },
+            EngineCommand::SetBusDelay { bus: BusId::A2, ms: 42.0 },
             EngineCommand::SetDefaultOutput { on: true },
             EngineCommand::SetMetersEnabled { on: false },
             EngineCommand::Shutdown,

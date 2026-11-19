@@ -18,6 +18,7 @@ export interface Ipc {
   setCompParams(stripId: number, params: CompParams): Promise<void>;
   setEqParams(stripId: number, params: EqParams): Promise<void>;
   setLimiterParams(bus: BusId, params: LimiterParams): Promise<void>;
+  setBusDelay(bus: BusId, ms: number): Promise<void>;
   setStripDevice(stripId: number, hwKey: string): Promise<void>;
   setBusTarget(bus: BusId, hwKey: string): Promise<void>;
   setDefaultOutput(on: boolean): Promise<void>;
@@ -49,6 +50,7 @@ function tauriIpc(): Ipc {
     setCompParams: (stripId, params) => invoke("set_comp_params", { stripId, params }),
     setEqParams: (stripId, params) => invoke("set_eq_params", { stripId, params }),
     setLimiterParams: (bus, params) => invoke("set_limiter_params", { bus, params }),
+    setBusDelay: (bus, ms) => invoke("set_bus_delay", { bus, ms }),
     setStripDevice: (stripId, hwKey) => invoke("set_strip_device", { stripId, hwKey }),
     setBusTarget: (bus, hwKey) => invoke("set_bus_target", { bus, hwKey }),
     setDefaultOutput: (on) => invoke("set_default_output", { on }),

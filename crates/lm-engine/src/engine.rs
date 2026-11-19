@@ -386,6 +386,11 @@ impl Engine {
         self.set_props(&bus.in_node(), &params::filter_params(&params::limiter_pairs(&bus.limiter)));
     }
 
+    fn apply_delay(&self, bus: &BusState) {
+        let s = clamp_delay_ms(bus.delay_ms) / 1000.0;
+        self.set_props(&bus.in_node(), &params::filter_params(&[("dl_l:Delay (s)", s), ("dl_r:Delay (s)", s)]));
+    }
+
     fn apply_eq(&self, strip: &StripState) {
         let e = &strip.eq;
         let mut pairs: Vec<(String, f32)> = vec![("eq:enabled".into(), e.enabled as u32 as f32)];
@@ -411,6 +416,7 @@ impl Engine {
         if let Some(b) = self.app.buses.iter().find(|b| b.in_node() == node_name) {
             self.apply_gain(Target::Bus { bus: b.id });
             self.apply_limiter(b);
+            self.apply_delay(b);
             self.apply_bus_mute(b.id);
         }
     }
@@ -516,6 +522,15 @@ impl Engine {
                     self.apply_limiter(b);
                 }
             }
+            EngineCommand::SetBusDelay { bus, ms } => {
+                if let Some(b) = self.app.buses.iter_mut().find(|b| b.id == bus) {
+                    b.delay_ms = clamp_delay_ms(ms);
+                }
+                if let Some(b) = self.app.buses.iter().find(|b| b.id == bus) {
+                    self.apply_delay(b);
+                }
+                self.dirty = true;
+            }
             EngineCommand::SetStripDevice { strip, hw_key } => {
                 let known = self.model.node_by_name(&hw_key).is_some();
                 if let Some(s) = self.app.strips.iter_mut().find(|s| s.id == strip) {
@@ -619,7 +634,14 @@ fn bus(id: BusId, label: &str, target: Option<String>) -> BusState {
         gain_db: 0.0,
         mute: false,
         limiter: LimiterParams::default(),
+        delay_ms: 0.0,
     }
+}
+
+/// NaN (or anything else non-finite) becomes 0 rather than poisoning the
+/// delay line or the saved profile.
+pub(crate) fn clamp_delay_ms(ms: f32) -> f32 {
+    if ms.is_finite() { ms.clamp(0.0, lm_protocol::MAX_BUS_DELAY_MS) } else { 0.0 }
 }
 
 fn run(

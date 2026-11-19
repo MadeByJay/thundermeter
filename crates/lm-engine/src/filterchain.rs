@@ -182,15 +182,24 @@ pub fn bus_args(bus_name: &str, label: &str, hw_target: Option<&str>) -> String 
             "state.restore-props": false,
         }),
     };
+    // PipeWire's builtin delay is mono, so one per channel. `max-delay` sizes
+    // the delay line; the live value is the "Delay (s)" control port.
+    let max_delay_s = lm_protocol::MAX_BUS_DELAY_MS / 1000.0;
     json!({
         "node.description": label,
         "media.name": label,
         "filter.graph": {
             "nodes": [
                 { "type": "lv2", "name": "lim", "plugin": LV2_LIMITER },
+                { "type": "builtin", "name": "dl_l", "label": "delay", "config": { "max-delay": max_delay_s } },
+                { "type": "builtin", "name": "dl_r", "label": "delay", "config": { "max-delay": max_delay_s } },
+            ],
+            "links": [
+                { "output": "lim:out_l", "input": "dl_l:In" },
+                { "output": "lim:out_r", "input": "dl_r:In" },
             ],
             "inputs":  [ "lim:in_l", "lim:in_r" ],
-            "outputs": [ "lim:out_l", "lim:out_r" ],
+            "outputs": [ "dl_l:Out", "dl_r:Out" ],
         },
         "capture.props": {
             "node.name": format!("{bus_name}.in"),
@@ -338,6 +347,29 @@ mod tests {
         let v = parse(&bus_args("lm.bus.a1", "Speakers", None));
         assert_eq!(v["filter.graph"]["nodes"][0]["name"], "lim");
         assert_eq!(v["filter.graph"]["inputs"][0], "lim:in_l");
+    }
+
+    /// The delay sits after the limiter, one mono builtin per channel, and its
+    /// line must be long enough for the largest value the UI can ask for.
+    /// "dl_l"/"dl_r" are the Props prefixes `engine::apply_delay` writes.
+    #[test]
+    fn bus_output_is_delayed_after_the_limiter() {
+        for target in [Some("alsa_output.hdmi"), None] {
+            let v = parse(&bus_args("lm.bus.a1", "Speakers", target));
+            let g = &v["filter.graph"];
+            for (i, name) in [(1, "dl_l"), (2, "dl_r")] {
+                assert_eq!(g["nodes"][i]["name"], name);
+                assert_eq!(g["nodes"][i]["type"], "builtin");
+                assert_eq!(g["nodes"][i]["label"], "delay");
+                let max = g["nodes"][i]["config"]["max-delay"].as_f64().expect("max-delay");
+                assert!(max * 1000.0 >= lm_protocol::MAX_BUS_DELAY_MS as f64 - 1e-3);
+            }
+            assert_eq!(g["links"][0]["output"], "lim:out_l");
+            assert_eq!(g["links"][0]["input"], "dl_l:In");
+            assert_eq!(g["links"][1]["output"], "lim:out_r");
+            assert_eq!(g["links"][1]["input"], "dl_r:In");
+            assert_eq!(g["outputs"], serde_json::json!(["dl_l:Out", "dl_r:Out"]));
+        }
     }
 
     #[test]

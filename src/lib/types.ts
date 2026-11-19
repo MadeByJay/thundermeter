@@ -66,7 +66,12 @@ export interface BusState {
   gainDb: number;
   mute: boolean;
   limiter: LimiterParams;
+  /** Post-limiter output delay in ms, 0..MAX_BUS_DELAY_MS. */
+  delayMs: number;
 }
+
+/** Mirrors lm_protocol::MAX_BUS_DELAY_MS — the engine clamps to it too. */
+export const MAX_BUS_DELAY_MS = 500;
 
 export interface DeviceInfo {
   nodeName: string;

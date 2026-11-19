@@ -365,6 +365,7 @@ fn bus_a1() -> BusState {
         gain_db: 0.0,
         mute: false,
         limiter: LimiterParams::default(),
+        delay_ms: 0.0,
     }
 }
 
@@ -454,6 +455,7 @@ fn b_bus_appears_as_a_microphone() {
         gain_db: 0.0,
         mute: false,
         limiter: LimiterParams::default(),
+        delay_ms: 0.0,
     };
 
     rig.load(&bus_args(&b.node_base(), &b.label, None));
@@ -557,6 +559,38 @@ fn mute_silences_the_strip() {
     rig.settle(300);
     let unmuted = rig.measure(&bus_meter, 400)[0];
     assert!(unmuted > -20.0, "unmute did not restore audio (peak {unmuted} dBFS)");
+}
+
+/// The bus delay must hold audio back by the time asked for, not merely load.
+/// With the delay line full of silence, an unmuted strip must stay inaudible
+/// at the bus output for well under the delay, then arrive at full level.
+/// The Props keys are the ones `engine::apply_delay` writes.
+#[test]
+#[ignore = "requires a PipeWire daemon; run with `make test-audio`"]
+fn bus_delay_holds_the_signal_back() {
+    const DELAY_S: f32 = 0.4;
+    let (rig, _strip_meter, bus_meter, s, b) = full_chain(0.5);
+
+    let undelayed = rig.measure(&bus_meter, 300)[0];
+    assert!(undelayed > -20.0, "no signal to delay (peak {undelayed} dBFS)");
+
+    rig.set_props(&b.in_node(), &params::filter_params(&[("dl_l:Delay (s)", DELAY_S), ("dl_r:Delay (s)", DELAY_S)]));
+    rig.set_props(&s.control_node(), &params::mute(true));
+    // Long enough for the delay line to fill with silence.
+    rig.settle(900);
+    let muted = rig.measure(&bus_meter, 200)[0];
+    assert!(muted < -60.0, "silence did not reach the bus ({muted} dBFS)");
+
+    rig.set_props(&s.control_node(), &params::mute(false));
+    let early = rig.measure(&bus_meter, 150)[0];
+    assert!(early < -60.0, "audio reached the bus {early} dBFS within 150 ms; the 400 ms delay did nothing");
+
+    rig.settle(400);
+    let late = rig.measure(&bus_meter, 300)[0];
+    assert!(
+        (late - -6.02).abs() < 1.5,
+        "delayed bus peak {late} dBFS, expected about -6; the delay changed the level or never released"
+    );
 }
 
 /// The bus limiter is overload protection, not a leveller: a steady tone

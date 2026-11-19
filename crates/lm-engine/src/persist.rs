@@ -87,6 +87,8 @@ fn sanitize(p: &mut Profile) {
     }
     for b in &mut p.buses {
         b.online = true;
+        // Profiles are hand-editable; keep the delay inside the line's length.
+        b.delay_ms = crate::engine::clamp_delay_ms(b.delay_ms);
     }
 }
 
@@ -138,6 +140,7 @@ mod tests {
                 gain_db: 0.0,
                 mute: false,
                 limiter: LimiterParams::default(),
+                delay_ms: 0.0,
             }],
         }
     }
@@ -277,6 +280,17 @@ releaseMs = 50.0
         assert_eq!(back.strips[0].gain_db, -6.0);
         sanitize(&mut back);
         assert_eq!(back.strips[0].eq.bands.len(), 8, "defaults then migration give a full band set");
+        assert_eq!(back.buses[0].delay_ms, 0.0, "profiles predating bus delay load undelayed");
+    }
+
+    #[test]
+    fn sanitize_keeps_bus_delay_inside_the_delay_line() {
+        let mut p = profile(vec![]);
+        for (written, loaded) in [(-20.0, 0.0), (35.5, 35.5), (9000.0, lm_protocol::MAX_BUS_DELAY_MS), (f32::NAN, 0.0)] {
+            p.buses[0].delay_ms = written;
+            sanitize(&mut p);
+            assert_eq!(p.buses[0].delay_ms, loaded, "delayMs = {written} in the profile");
+        }
     }
 
     #[test]
