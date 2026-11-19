@@ -68,6 +68,9 @@ export interface BusState {
   limiter: LimiterParams;
   /** Post-limiter output delay in ms, 0..MAX_BUS_DELAY_MS. */
   delayMs: number;
+  /** Pre-limiter EQ. Same 8-band shape as a strip; only bands 0–3 are
+   *  user-facing (buses have no color pad), 4–7 stay flat. */
+  eq: EqParams;
 }
 
 /** Mirrors lm_protocol::MAX_BUS_DELAY_MS — the engine clamps to it too. */

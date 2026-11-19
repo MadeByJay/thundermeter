@@ -12,6 +12,7 @@
   });
 
   let eqStrip = $derived(ui.eqStrip !== null ? mixer.strip(ui.eqStrip) : undefined);
+  let eqBus = $derived(ui.eqBus !== null ? mixer.bus(ui.eqBus) : undefined);
   let dynStrip = $derived(ui.dynStrip !== null ? mixer.strip(ui.dynStrip) : undefined);
 </script>
 
@@ -24,7 +25,21 @@
   {/if}
 </div>
 {#if eqStrip}
-  <EqPanel strip={eqStrip} />
+  {@const s = eqStrip}
+  <EqPanel
+    title={s.label}
+    eq={s.eq}
+    onchange={(p) => mixer.setEqParams(s.id, p)}
+    onclose={() => (ui.eqStrip = null)}
+  />
+{:else if eqBus}
+  {@const b = eqBus}
+  <EqPanel
+    title={`${b.id} · ${b.label}`}
+    eq={b.eq}
+    onchange={(p) => mixer.setBusEqParams(b.id, p)}
+    onclose={() => (ui.eqBus = null)}
+  />
 {/if}
 {#if dynStrip}
   <DynPanel strip={dynStrip} />

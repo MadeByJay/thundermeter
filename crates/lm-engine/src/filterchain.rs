@@ -189,16 +189,20 @@ pub fn bus_args(bus_name: &str, label: &str, hw_target: Option<&str>) -> String 
         "node.description": label,
         "media.name": label,
         "filter.graph": {
+            // EQ ahead of the limiter, so a boost cannot push past the ceiling.
             "nodes": [
+                { "type": "lv2", "name": "eq",  "plugin": LV2_EQ },
                 { "type": "lv2", "name": "lim", "plugin": LV2_LIMITER },
                 { "type": "builtin", "name": "dl_l", "label": "delay", "config": { "max-delay": max_delay_s } },
                 { "type": "builtin", "name": "dl_r", "label": "delay", "config": { "max-delay": max_delay_s } },
             ],
             "links": [
+                { "output": "eq:out_l",  "input": "lim:in_l" },
+                { "output": "eq:out_r",  "input": "lim:in_r" },
                 { "output": "lim:out_l", "input": "dl_l:In" },
                 { "output": "lim:out_r", "input": "dl_r:In" },
             ],
-            "inputs":  [ "lim:in_l", "lim:in_r" ],
+            "inputs":  [ "eq:in_l", "eq:in_r" ],
             "outputs": [ "dl_l:Out", "dl_r:Out" ],
         },
         "capture.props": {
@@ -342,11 +346,21 @@ mod tests {
         assert_eq!(v["filter.graph"]["outputs"][0], "eq:out_l");
     }
 
+    /// Bus chain is EQ -> limiter -> delay. The EQ must come first so a boost
+    /// is still caught by the limiter; "eq"/"lim" are the Props prefixes the
+    /// engine writes, shared with strips for "eq".
     #[test]
-    fn bus_dsp_is_a_limiter() {
+    fn bus_dsp_is_eq_then_limiter() {
         let v = parse(&bus_args("lm.bus.a1", "Speakers", None));
-        assert_eq!(v["filter.graph"]["nodes"][0]["name"], "lim");
-        assert_eq!(v["filter.graph"]["inputs"][0], "lim:in_l");
+        let g = &v["filter.graph"];
+        assert_eq!(g["nodes"][0]["name"], "eq");
+        assert_eq!(g["nodes"][0]["plugin"], LV2_EQ, "same plugin as strips, so the same port names");
+        assert_eq!(g["nodes"][1]["name"], "lim");
+        assert_eq!(g["inputs"], serde_json::json!(["eq:in_l", "eq:in_r"]));
+        assert_eq!(g["links"][0]["output"], "eq:out_l");
+        assert_eq!(g["links"][0]["input"], "lim:in_l");
+        assert_eq!(g["links"][1]["output"], "eq:out_r");
+        assert_eq!(g["links"][1]["input"], "lim:in_r");
     }
 
     /// The delay sits after the limiter, one mono builtin per channel, and its
@@ -357,17 +371,17 @@ mod tests {
         for target in [Some("alsa_output.hdmi"), None] {
             let v = parse(&bus_args("lm.bus.a1", "Speakers", target));
             let g = &v["filter.graph"];
-            for (i, name) in [(1, "dl_l"), (2, "dl_r")] {
+            for (i, name) in [(2, "dl_l"), (3, "dl_r")] {
                 assert_eq!(g["nodes"][i]["name"], name);
                 assert_eq!(g["nodes"][i]["type"], "builtin");
                 assert_eq!(g["nodes"][i]["label"], "delay");
                 let max = g["nodes"][i]["config"]["max-delay"].as_f64().expect("max-delay");
                 assert!(max * 1000.0 >= lm_protocol::MAX_BUS_DELAY_MS as f64 - 1e-3);
             }
-            assert_eq!(g["links"][0]["output"], "lim:out_l");
-            assert_eq!(g["links"][0]["input"], "dl_l:In");
-            assert_eq!(g["links"][1]["output"], "lim:out_r");
-            assert_eq!(g["links"][1]["input"], "dl_r:In");
+            assert_eq!(g["links"][2]["output"], "lim:out_l");
+            assert_eq!(g["links"][2]["input"], "dl_l:In");
+            assert_eq!(g["links"][3]["output"], "lim:out_r");
+            assert_eq!(g["links"][3]["input"], "dl_r:In");
             assert_eq!(g["outputs"], serde_json::json!(["dl_l:Out", "dl_r:Out"]));
         }
     }

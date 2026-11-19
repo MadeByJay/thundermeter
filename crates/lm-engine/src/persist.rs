@@ -89,6 +89,12 @@ fn sanitize(p: &mut Profile) {
         b.online = true;
         // Profiles are hand-editable; keep the delay inside the line's length.
         b.delay_ms = crate::engine::clamp_delay_ms(b.delay_ms);
+        // A hand-trimmed band list would leave plugin bands at stale values;
+        // pad from the defaults (flat) up to the full eight.
+        let defaults = lm_protocol::EqParams::default().bands;
+        while b.eq.bands.len() < defaults.len() {
+            b.eq.bands.push(defaults[b.eq.bands.len()]);
+        }
     }
 }
 
@@ -141,6 +147,7 @@ mod tests {
                 mute: false,
                 limiter: LimiterParams::default(),
                 delay_ms: 0.0,
+                eq: EqParams::default(),
             }],
         }
     }
@@ -281,6 +288,21 @@ releaseMs = 50.0
         sanitize(&mut back);
         assert_eq!(back.strips[0].eq.bands.len(), 8, "defaults then migration give a full band set");
         assert_eq!(back.buses[0].delay_ms, 0.0, "profiles predating bus delay load undelayed");
+        assert!(!back.buses[0].eq.enabled, "profiles predating bus EQ load with it bypassed");
+        assert_eq!(back.buses[0].eq.bands.len(), 8);
+        assert!(back.buses[0].eq.bands.iter().all(|b| b.gain_db == 0.0), "and flat");
+    }
+
+    #[test]
+    fn sanitize_pads_a_trimmed_bus_eq_to_eight_flat_bands() {
+        let mut p = profile(vec![]);
+        p.buses[0].eq.bands.truncate(2);
+        p.buses[0].eq.bands[0].gain_db = -3.0;
+        sanitize(&mut p);
+        let bands = &p.buses[0].eq.bands;
+        assert_eq!(bands.len(), 8);
+        assert_eq!(bands[0].gain_db, -3.0, "existing bands are kept");
+        assert_eq!(&bands[2..], &EqParams::default().bands[2..]);
     }
 
     #[test]

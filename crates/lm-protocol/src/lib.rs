@@ -201,6 +201,12 @@ pub struct BusState {
     /// before it existed still load, at 0.
     #[serde(default)]
     pub delay_ms: f32,
+    /// Pre-limiter EQ shaping everything this bus sends. Same 8-band layout
+    /// as a strip so the plugin, Props keys and panel are shared, but only
+    /// bands 0–3 are user-facing: buses have no color pad, so 4–7 stay flat.
+    /// `default` so profiles written before bus EQ still load.
+    #[serde(default)]
+    pub eq: EqParams,
 }
 
 impl BusState {
@@ -275,6 +281,7 @@ pub enum EngineCommand {
     SetLimiterParams { bus: BusId, params: LimiterParams },
     /// Delay a bus's output by `ms` (clamped to `0..=MAX_BUS_DELAY_MS`).
     SetBusDelay { bus: BusId, ms: f32 },
+    SetBusEqParams { bus: BusId, params: EqParams },
     /// Point a hardware strip at a different capture device (module reload).
     SetStripDevice { strip: StripId, hw_key: String },
     /// Point an A-bus at a different output device (module reload).
@@ -329,6 +336,7 @@ mod tests {
             mute: false,
             limiter: LimiterParams::default(),
             delay_ms: 0.0,
+            eq: EqParams::default(),
         }
     }
 
@@ -422,6 +430,7 @@ mod tests {
         }
         assert!(json["buses"][0].get("targetHwKey").is_some());
         assert!(json["buses"][0].get("delayMs").is_some());
+        assert!(json["buses"][0].get("eq").is_some());
         assert!(json["devices"][0].get("nodeName").is_some());
         assert!(json["devices"][0].get("mediaClass").is_some());
     }
@@ -471,6 +480,7 @@ mod tests {
             EngineCommand::SetRoute { strip: 1, bus: BusId::B1, on: true },
             EngineCommand::SetEqParams { strip: 2, params: EqParams::default() },
             EngineCommand::SetBusDelay { bus: BusId::A2, ms: 42.0 },
+            EngineCommand::SetBusEqParams { bus: BusId::A1, params: EqParams::default() },
             EngineCommand::SetDefaultOutput { on: true },
             EngineCommand::SetMetersEnabled { on: false },
             EngineCommand::Shutdown,

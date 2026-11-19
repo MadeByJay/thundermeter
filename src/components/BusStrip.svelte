@@ -2,6 +2,7 @@
   import type { BusState } from "../lib/types";
   import { MAX_BUS_DELAY_MS } from "../lib/types";
   import { mixer } from "../lib/state/mixer.svelte";
+  import { ui } from "../lib/state/ui.svelte";
   import StripHeader from "./StripHeader.svelte";
   import Meter from "./Meter.svelte";
   import Scale from "./Scale.svelte";
@@ -73,6 +74,20 @@
       onchange={(v) => mixer.setBusDelay(bus.id, v)}
     />
   </div>
+  <div class="panelbtns">
+    <button
+      class="pbtn"
+      class:active={bus.eq.enabled}
+      aria-pressed={bus.eq.enabled}
+      title="Open bus equalizer"
+      onclick={() => {
+        ui.eqStrip = null;
+        ui.eqBus = bus.id;
+      }}
+    >
+      EQ
+    </button>
+  </div>
 
   <MuteSoloButtons mute={bus.mute} onmute={(on) => mixer.setMute({ bus: bus.id }, on)} />
 </div>
@@ -111,5 +126,31 @@
     display: flex;
     justify-content: center;
     gap: 8px;
+  }
+  /* Matches InputStrip's EQ/DYN buttons. */
+  .panelbtns {
+    display: flex;
+    justify-content: center;
+    margin-top: -4px;
+  }
+  .pbtn {
+    height: 19px;
+    width: 30px;
+    font: 500 9px var(--mono);
+    letter-spacing: 0.05em;
+    background: var(--bg-3);
+    color: var(--text-3);
+    border: 1px solid var(--border-0);
+    border-radius: 2px;
+    box-shadow: inset 0 1px 0 var(--hl-top);
+  }
+  .pbtn:hover {
+    background: var(--bg-4);
+    color: var(--text-2);
+  }
+  .pbtn.active {
+    background: var(--accent-glow);
+    color: var(--accent);
+    border-color: var(--accent);
   }
 </style>

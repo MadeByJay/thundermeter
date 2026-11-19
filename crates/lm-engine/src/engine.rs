@@ -392,7 +392,16 @@ impl Engine {
     }
 
     fn apply_eq(&self, strip: &StripState) {
-        let e = &strip.eq;
+        self.apply_eq_to(&strip.control_node(), &strip.eq);
+    }
+
+    /// Buses run the same para_equalizer under the same "eq" node name, so
+    /// the Props keys are identical; only the target node differs.
+    fn apply_bus_eq(&self, bus: &BusState) {
+        self.apply_eq_to(&bus.in_node(), &bus.eq);
+    }
+
+    fn apply_eq_to(&self, node_name: &str, e: &EqParams) {
         let mut pairs: Vec<(String, f32)> = vec![("eq:enabled".into(), e.enabled as u32 as f32)];
         for (i, band) in e.bands.iter().enumerate().take(8) {
             pairs.push((format!("eq:ft_{i}"), band.kind.lsp_filter_type()));
@@ -401,7 +410,7 @@ impl Engine {
             pairs.push((format!("eq:q_{i}"), band.q.clamp(0.0, 100.0)));
         }
         let borrowed: Vec<(&str, f32)> = pairs.iter().map(|(k, v)| (k.as_str(), *v)).collect();
-        self.set_props(&strip.control_node(), &params::filter_params(&borrowed));
+        self.set_props(node_name, &params::filter_params(&borrowed));
     }
 
     /// Push the full parameter set for whichever strip/bus owns `node_name`.
@@ -415,6 +424,7 @@ impl Engine {
         }
         if let Some(b) = self.app.buses.iter().find(|b| b.in_node() == node_name) {
             self.apply_gain(Target::Bus { bus: b.id });
+            self.apply_bus_eq(b);
             self.apply_limiter(b);
             self.apply_delay(b);
             self.apply_bus_mute(b.id);
@@ -531,6 +541,15 @@ impl Engine {
                 }
                 self.dirty = true;
             }
+            EngineCommand::SetBusEqParams { bus, params } => {
+                if let Some(b) = self.app.buses.iter_mut().find(|b| b.id == bus) {
+                    b.eq = params;
+                }
+                if let Some(b) = self.app.buses.iter().find(|b| b.id == bus) {
+                    self.apply_bus_eq(b);
+                }
+                self.dirty = true;
+            }
             EngineCommand::SetStripDevice { strip, hw_key } => {
                 let known = self.model.node_by_name(&hw_key).is_some();
                 if let Some(s) = self.app.strips.iter_mut().find(|s| s.id == strip) {
@@ -635,6 +654,7 @@ fn bus(id: BusId, label: &str, target: Option<String>) -> BusState {
         mute: false,
         limiter: LimiterParams::default(),
         delay_ms: 0.0,
+        eq: EqParams::default(),
     }
 }
 

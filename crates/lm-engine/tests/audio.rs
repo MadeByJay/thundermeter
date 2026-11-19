@@ -21,7 +21,7 @@ use lm_engine::links::LinkManager;
 use lm_engine::meter::{MeterAccum, MeterTap};
 use lm_engine::params;
 use lm_engine::registry::{parse, GraphModel, PortDirection};
-use lm_protocol::{BusState, LimiterParams, StripKind, StripState};
+use lm_protocol::{BusState, EqParams, LimiterParams, StripKind, StripState};
 
 use pipewire::context::ContextRc;
 use pipewire::core::CoreRc;
@@ -366,6 +366,7 @@ fn bus_a1() -> BusState {
         mute: false,
         limiter: LimiterParams::default(),
         delay_ms: 0.0,
+        eq: EqParams::default(),
     }
 }
 
@@ -402,7 +403,7 @@ fn full_chain(amplitude: f32) -> (Rig, Arc<MeterAccum>, Arc<MeterAccum>, StripSt
     rig.settle(500);
 
     make_transparent(&rig, &s.control_node());
-    rig.set_props(&b.in_node(), &params::filter_params(&[("lim:enabled", 0.0)]));
+    rig.set_props(&b.in_node(), &params::filter_params(&[("lim:enabled", 0.0), ("eq:enabled", 0.0)]));
     rig.set_props(&b.in_node(), &params::channel_volumes(1.0));
     rig.settle(300);
 
@@ -456,6 +457,7 @@ fn b_bus_appears_as_a_microphone() {
         mute: false,
         limiter: LimiterParams::default(),
         delay_ms: 0.0,
+        eq: EqParams::default(),
     };
 
     rig.load(&bus_args(&b.node_base(), &b.label, None));
@@ -616,6 +618,45 @@ fn bus_limiter_is_transparent_below_the_ceiling() {
     let over = rig.measure(&bus_meter, 300)[0];
     eprintln!("+2 dBFS over through the limiter: {over:.2} dBFS");
     assert!((over - -1.0).abs() < 0.5, "an over came out at {over:.2} dBFS, expected about -1");
+}
+
+/// Bus EQ shapes the bus alone: a +6 dB bell on the 1 kHz test tone must lift
+/// the bus by about 6 dB while the strip feeding it stays put, and bypassing
+/// it must restore the level. These are the Props keys `apply_bus_eq` writes
+/// to the bus's mix-input node.
+#[test]
+#[ignore = "requires a PipeWire daemon; run with `make test-audio`"]
+fn bus_eq_shapes_only_the_bus() {
+    let (rig, strip_meter, bus_meter, _s, b) = full_chain(0.5); // 1 kHz, -6 dBFS
+
+    let strip_before = rig.measure(&strip_meter, 300)[0];
+    let bus_before = rig.measure(&bus_meter, 300)[0];
+    assert!(bus_before > -20.0, "no signal to equalize (peak {bus_before} dBFS)");
+
+    rig.set_props(
+        &b.in_node(),
+        &params::filter_params(&[
+            ("eq:enabled", 1.0),
+            ("eq:ft_1", lm_protocol::EqBandKind::Peak.lsp_filter_type()),
+            ("eq:f_1", 1000.0),
+            ("eq:g_1", params::db_to_linear(6.0)),
+            ("eq:q_1", 1.0),
+        ]),
+    );
+    rig.settle(300);
+    let boosted = rig.measure(&bus_meter, 300)[0];
+    assert!(
+        (boosted - bus_before - 6.0).abs() < 1.5,
+        "bus moved {} dB, expected +6; the bus EQ is not reaching the plugin",
+        boosted - bus_before
+    );
+    let strip_after = rig.measure(&strip_meter, 300)[0];
+    assert!((strip_after - strip_before).abs() < 0.5, "bus EQ leaked into the strip ({strip_before} -> {strip_after} dBFS)");
+
+    rig.set_props(&b.in_node(), &params::filter_params(&[("eq:enabled", 0.0)]));
+    rig.settle(300);
+    let bypassed = rig.measure(&bus_meter, 300)[0];
+    assert!((bypassed - bus_before).abs() < 1.0, "bypass left the bus at {bypassed} dBFS, was {bus_before}");
 }
 
 /// The gate threshold is written as linear gain. A gate set well above the

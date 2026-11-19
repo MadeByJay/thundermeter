@@ -162,6 +162,12 @@ class MixerStore {
     void ipc.setBusDelay(bus, v);
   }
 
+  setBusEqParams(bus: BusId, params: EqParams): void {
+    const b = this.bus(bus);
+    if (b) b.eq = params;
+    void ipc.setBusEqParams(bus, params);
+  }
+
   setStripDevice(stripId: number, hwKey: string): void {
     const s = this.strip(stripId);
     if (s) s.hwKey = hwKey;

@@ -1,13 +1,18 @@
 <script lang="ts">
-  import type { EqBand, StripState } from "../lib/types";
-  import { mixer } from "../lib/state/mixer.svelte";
-  import { ui } from "../lib/state/ui.svelte";
+  import type { EqBand, EqParams } from "../lib/types";
   import { EQ_FMAX, EQ_FMIN, freqToX, responseCurve, xToFreq } from "../lib/utils/eq";
 
+  /** Owner-agnostic: strips and buses both open this panel. It edits bands
+   *  0–3 only and carries 4–7 through untouched (a strip's color pad owns
+   *  them; on a bus they stay flat). */
   interface Props {
-    strip: StripState;
+    /** Shown beside "EQ" in the header: the strip or bus label. */
+    title: string;
+    eq: EqParams;
+    onchange: (params: EqParams) => void;
+    onclose: () => void;
   }
-  let { strip }: Props = $props();
+  let { title, eq, onchange, onclose }: Props = $props();
 
   const W = 396;
   const H = 180;
@@ -22,11 +27,11 @@
   onMount(() => {
     // Untangle crossed bands from older sessions: keep kinds in place,
     // redistribute the frequencies in ascending order.
-    const freqs = strip.eq.bands.slice(0, 4).map((b) => b.freqHz);
+    const freqs = eq.bands.slice(0, 4).map((b) => b.freqHz);
     const sorted = [...freqs].sort((a, b) => a - b);
     if (freqs.some((f, i) => f !== sorted[i])) {
-      const bands = strip.eq.bands.map((b, i) => (i < 4 ? { ...b, freqHz: sorted[i]! } : b));
-      mixer.setEqParams(strip.id, { ...strip.eq, bands });
+      const bands = eq.bands.map((b, i) => (i < 4 ? { ...b, freqHz: sorted[i]! } : b));
+      onchange({ ...eq, bands });
     }
   });
 
@@ -41,8 +46,8 @@
   }
 
   function setBand(i: number, patch: Partial<EqBand>) {
-    const bands = strip.eq.bands.map((b, j) => (j === i ? { ...b, ...patch } : b));
-    mixer.setEqParams(strip.id, { ...strip.eq, bands, enabled: true });
+    const bands = eq.bands.map((b, j) => (j === i ? { ...b, ...patch } : b));
+    onchange({ ...eq, bands, enabled: true });
   }
 
   function fmtFreq(f: number): string {
@@ -51,7 +56,7 @@
 
   // ---- canvas drawing (redraws on any eq change via $effect) ----
   $effect(() => {
-    const eq = strip.eq;
+    // Reading the `eq` prop below is what makes this effect track it.
     const sel = selected;
     const ctx = canvas?.getContext("2d");
     if (!ctx) return;
@@ -141,7 +146,7 @@
   function bandAt(mx: number, my: number): number | null {
     let best: number | null = null;
     let bestDist = 14;
-    strip.eq.bands.slice(0, 4).forEach((b, i) => {
+    eq.bands.slice(0, 4).forEach((b, i) => {
       const dx = freqToX(b.freqHz, W) - mx;
       const dy = yForDb(b.gainDb) - my;
       const d = Math.hypot(dx, dy);
@@ -172,7 +177,7 @@
     const [mx, my] = canvasPos(e);
     // Bands cannot cross: keep each band between its neighbors (small margin)
     // so LOW/PEAK/PEAK/HIGH always appear left-to-right in chip order.
-    const bands = strip.eq.bands;
+    const bands = eq.bands;
     let lo = selected > 0 ? bands[selected - 1]!.freqHz * 1.1 : EQ_FMIN;
     let hi = selected < 3 ? bands[selected + 1]!.freqHz / 1.1 : EQ_FMAX;
     lo = Math.max(EQ_FMIN, lo);
@@ -196,7 +201,7 @@
     e.preventDefault();
     const [mx, my] = canvasPos(e);
     const hit = bandAt(mx, my) ?? selected;
-    const b = strip.eq.bands[hit];
+    const b = eq.bands[hit];
     if (!b) return;
     const dir = e.deltaY < 0 ? 1 : -1;
     const q = Math.max(0.1, Math.min(10, b.q * (dir > 0 ? 1.15 : 1 / 1.15)));
@@ -205,10 +210,10 @@
   }
 
   function toggleEnabled() {
-    mixer.setEqParams(strip.id, { ...strip.eq, enabled: !strip.eq.enabled });
+    onchange({ ...eq, enabled: !eq.enabled });
   }
   function close() {
-    ui.eqStrip = null;
+    onclose();
   }
   function onkeydown(e: KeyboardEvent) {
     if (e.key === "Escape") close();
@@ -222,26 +227,26 @@
 <div class="scrim" onclick={(e) => e.target === e.currentTarget && close()}>
   <div class="panel" role="dialog" aria-label="Equalizer">
     <header>
-      <div class="title">EQ <span class="sub">{strip.label}</span></div>
+      <div class="title">EQ <span class="sub">{title}</span></div>
       <button
         class="enbtn"
         title="Reset all bands to defaults"
         onclick={() =>
-          mixer.setEqParams(strip.id, {
-            ...strip.eq,
+          onchange({
+            ...eq,
             bands: [
               { kind: "low_shelf", freqHz: 100, gainDb: 0, q: 0.7 },
               { kind: "peak", freqHz: 400, gainDb: 0, q: 1 },
               { kind: "peak", freqHz: 2500, gainDb: 0, q: 1 },
               { kind: "high_shelf", freqHz: 8000, gainDb: 0, q: 0.7 },
-              ...strip.eq.bands.slice(4),
+              ...eq.bands.slice(4),
             ],
           })}
       >
         RESET
       </button>
-      <button class="enbtn" class:active={strip.eq.enabled} aria-pressed={strip.eq.enabled} onclick={toggleEnabled}>
-        {strip.eq.enabled ? "ON" : "OFF"}
+      <button class="enbtn" class:active={eq.enabled} aria-pressed={eq.enabled} onclick={toggleEnabled}>
+        {eq.enabled ? "ON" : "OFF"}
       </button>
       <button class="closebtn" title="Close" onclick={close}>
         <svg width="11" height="11" viewBox="0 0 12 12"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.25" /></svg>
@@ -261,7 +266,7 @@
     ></canvas>
 
     <div class="bands">
-      {#each strip.eq.bands.slice(0, 4) as b, i}
+      {#each eq.bands.slice(0, 4) as b, i}
         <button class="band" class:sel={i === selected} onclick={() => (selected = i)}>
           <span class="kind">{KIND_LABEL[b.kind]}</span>
           <span class="vals">{fmtFreq(b.freqHz)}Hz {b.gainDb > 0 ? "+" : ""}{b.gainDb.toFixed(1)}dB Q{b.q.toFixed(1)}</span>

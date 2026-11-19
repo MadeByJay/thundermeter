@@ -76,6 +76,11 @@ fn set_bus_delay(data: tauri::State<AppData>, bus: BusId, ms: f32) -> Result<(),
 }
 
 #[tauri::command]
+fn set_bus_eq_params(data: tauri::State<AppData>, bus: BusId, params: EqParams) -> Result<(), String> {
+    send(&data, EngineCommand::SetBusEqParams { bus, params })
+}
+
+#[tauri::command]
 fn set_strip_device(data: tauri::State<AppData>, strip_id: StripId, hw_key: String) -> Result<(), String> {
     send(&data, EngineCommand::SetStripDevice { strip: strip_id, hw_key })
 }
@@ -159,6 +164,7 @@ fn main() {
             set_eq_params,
             set_limiter_params,
             set_bus_delay,
+            set_bus_eq_params,
             set_strip_device,
             set_bus_target,
             set_default_output,
