@@ -55,6 +55,23 @@ pub fn mute(muted: bool) -> Vec<u8> {
     }])
 }
 
+/// LSP limiter control values for a bus.
+///
+/// `alr` and `boost` are switched off explicitly: the plugin defaults both on.
+/// Automatic level regulation rides the gain of anything near the threshold
+/// (5 ms attack, 50 ms release) and gain boost lifts everything so peaks hit
+/// full scale; together they make loud material audibly ebb and swell. A bus
+/// limiter here is overload protection only — transparent until a real over.
+pub fn limiter_pairs(l: &lm_protocol::LimiterParams) -> Vec<(&'static str, f32)> {
+    vec![
+        ("lim:enabled", l.enabled as u32 as f32),
+        ("lim:th", db_to_linear(l.threshold_db)),
+        ("lim:rt", l.release_ms),
+        ("lim:alr", 0.0),
+        ("lim:boost", 0.0),
+    ]
+}
+
 /// dB → linear gain (LSP threshold/makeup ports take linear values).
 pub fn db_to_linear(db: f32) -> f32 {
     10f32.powf(db / 20.0)
@@ -128,6 +145,18 @@ mod tests {
         assert!(matches!(fields[1], Value::Float(v) if (v - 0.063).abs() < 1e-6));
         assert!(matches!(&fields[2], Value::String(s) if s == "comp:cr"));
         assert!(matches!(fields[3], Value::Float(v) if (v - 4.0).abs() < 1e-6));
+    }
+
+    /// The plugin defaults ALR and gain boost on; leaving them unset makes
+    /// every bus an automatic leveller that pumps on loud material.
+    #[test]
+    fn limiter_switches_off_level_regulation_and_boost() {
+        let pairs = limiter_pairs(&lm_protocol::LimiterParams::default());
+        let get = |k: &str| pairs.iter().find(|(key, _)| *key == k).unwrap_or_else(|| panic!("no {k}")).1;
+        assert_eq!(get("lim:alr"), 0.0);
+        assert_eq!(get("lim:boost"), 0.0);
+        assert_eq!(get("lim:enabled"), 1.0);
+        assert!((get("lim:th") - db_to_linear(-1.0)).abs() < 1e-6, "threshold is linear");
     }
 
     #[test]

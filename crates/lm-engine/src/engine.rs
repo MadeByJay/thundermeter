@@ -383,13 +383,7 @@ impl Engine {
     }
 
     fn apply_limiter(&self, bus: &BusState) {
-        let l = &bus.limiter;
-        let pairs: Vec<(&str, f32)> = vec![
-            ("lim:enabled", l.enabled as u32 as f32),
-            ("lim:th", params::db_to_linear(l.threshold_db)),
-            ("lim:rt", l.release_ms),
-        ];
-        self.set_props(&bus.in_node(), &params::filter_params(&pairs));
+        self.set_props(&bus.in_node(), &params::filter_params(&params::limiter_pairs(&bus.limiter)));
     }
 
     fn apply_eq(&self, strip: &StripState) {

@@ -213,6 +213,7 @@ impl Rig {
         self.state.borrow().model.node_by_name(name).is_some()
     }
 
+
     fn node_media_class(&self, name: &str) -> Option<String> {
         self.state.borrow().model.node_by_name(name).map(|n| n.media_class.clone())
     }
@@ -556,6 +557,31 @@ fn mute_silences_the_strip() {
     rig.settle(300);
     let unmuted = rig.measure(&bus_meter, 400)[0];
     assert!(unmuted > -20.0, "unmute did not restore audio (peak {unmuted} dBFS)");
+}
+
+/// The bus limiter is overload protection, not a leveller: a steady tone
+/// just under its -1 dB ceiling must come through unchanged and steady
+/// (LSP's default automatic level regulation and gain boost would ride and
+/// lift it), while a real over at 0 dBFS must still be held near -1 dB.
+#[test]
+#[ignore = "requires a PipeWire daemon; run with `make test-audio`"]
+fn bus_limiter_is_transparent_below_the_ceiling() {
+    let (rig, _strip_meter, bus_meter, s, b) = full_chain(params::db_to_linear(-2.0)); // 1 kHz, -2 dBFS peak
+    rig.set_props(&b.in_node(), &params::filter_params(&params::limiter_pairs(&LimiterParams::default())));
+    rig.settle(400);
+
+    let windows: Vec<f32> = (0..6).map(|_| rig.measure(&bus_meter, 150)[0]).collect();
+    let (lo, hi) = windows.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+    eprintln!("-2 dBFS tone through the limiter, per 150 ms: {windows:.2?}");
+    assert!((lo - -2.0).abs() < 0.3 && (hi - -2.0).abs() < 0.3, "limiter changed a tone below its ceiling: {lo:.2}..{hi:.2} dBFS, expected -2");
+    assert!(hi - lo < 0.2, "level wandered {:.2} dB under a steady tone (gain riding)", hi - lo);
+
+    // +6 dB on the strip makes it a 0 dBFS over (headroom is fine in float).
+    rig.set_props(&s.control_node(), &params::channel_volumes(params::db_to_linear(4.0)));
+    rig.settle(400);
+    let over = rig.measure(&bus_meter, 300)[0];
+    eprintln!("+2 dBFS over through the limiter: {over:.2} dBFS");
+    assert!((over - -1.0).abs() < 0.5, "an over came out at {over:.2} dBFS, expected about -1");
 }
 
 /// The gate threshold is written as linear gain. A gate set well above the
