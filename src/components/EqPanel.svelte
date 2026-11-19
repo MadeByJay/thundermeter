@@ -1,5 +1,6 @@
 <script lang="ts">
-  import type { EqBand, EqParams } from "../lib/types";
+  import type { EqBand, EqBandKind, EqParams } from "../lib/types";
+  import { hasGain, hasSlope } from "../lib/types";
   import { EQ_FMAX, EQ_FMIN, freqToX, responseCurve, xToFreq } from "../lib/utils/eq";
 
   /** Owner-agnostic: strips and buses both open this panel. It edits bands
@@ -35,7 +36,39 @@
     }
   });
 
-  const KIND_LABEL = { low_shelf: "LOW", peak: "PEAK", high_shelf: "HIGH" } as const;
+  const KIND_LABEL: Record<EqBandKind, string> = {
+    low_shelf: "LOW",
+    peak: "PEAK",
+    high_shelf: "HIGH",
+    high_pass: "HP",
+    low_pass: "LP",
+    notch: "NOTCH",
+    band_pass: "BAND",
+  };
+  const KIND_TITLE: Record<EqBandKind, string> = {
+    low_shelf: "Low shelf: lift or cut everything below",
+    peak: "Peak: lift or cut around the frequency",
+    high_shelf: "High shelf: lift or cut everything above",
+    high_pass: "High-pass (low cut): remove everything below",
+    low_pass: "Low-pass (high cut): remove everything above",
+    notch: "Notch: remove a narrow band (hum, ringing)",
+    band_pass: "Band-pass: keep about two octaves either side of the frequency",
+  };
+  const KINDS = Object.keys(KIND_LABEL) as EqBandKind[];
+  const SLOPES = [12, 24, 36, 48]; // dB/oct for slope 0..3
+  /** The band the TYPE/SLOPE rows edit. */
+  let sel = $derived(eq.bands[selected]);
+
+  /** Switching type starts from that type's usual settings: a flat (0.707)
+   *  Q and 24 dB/oct for cuts, a narrow Q for a notch. Gain survives only
+   *  between gain types. */
+  function setKind(i: number, kind: EqBandKind) {
+    const b = eq.bands[i];
+    if (!b || b.kind === kind) return;
+    const gainDb = hasGain(kind) && hasGain(b.kind) ? b.gainDb : 0;
+    const q = kind === "notch" ? 4 : hasSlope(kind) ? 0.707 : kind === "peak" || kind === "band_pass" ? 1 : 0.7;
+    setBand(i, { kind, gainDb, q, slope: hasSlope(kind) ? (hasSlope(b.kind) ? b.slope : 1) : 0 });
+  }
   const GRID_FREQS = [50, 100, 200, 500, 1000, 2000, 5000, 10000];
 
   function yForDb(db: number): number {
@@ -124,7 +157,7 @@
     // band handles
     eq.bands.slice(0, 4).forEach((b, i) => {
       const x = freqToX(b.freqHz, W);
-      const y = yForDb(b.gainDb);
+      const y = yForDb(hasGain(b.kind) ? b.gainDb : 0);
       ctx.beginPath();
       ctx.arc(x, y, i === sel ? 6 : 5, 0, Math.PI * 2);
       ctx.fillStyle = col("--bg-2");
@@ -148,7 +181,7 @@
     let bestDist = 14;
     eq.bands.slice(0, 4).forEach((b, i) => {
       const dx = freqToX(b.freqHz, W) - mx;
-      const dy = yForDb(b.gainDb) - my;
+      const dy = yForDb(hasGain(b.kind) ? b.gainDb : 0) - my;
       const d = Math.hypot(dx, dy);
       if (d < bestDist) {
         bestDist = d;
@@ -184,10 +217,10 @@
     hi = Math.max(lo, Math.min(EQ_FMAX, hi));
     const freqHz = Math.max(lo, Math.min(hi, xToFreq(mx, W)));
     const gainDb = Math.max(-DB_RANGE, Math.min(DB_RANGE, dbForY(my)));
-    setBand(selected, {
-      freqHz: Math.round(freqHz),
-      gainDb: Math.round(gainDb * 10) / 10,
-    });
+    // Gainless bands (cuts, notch, band-pass) only move in frequency.
+    const patch: Partial<EqBand> = { freqHz: Math.round(freqHz) };
+    if (hasGain(bands[selected]!.kind)) patch.gainDb = Math.round(gainDb * 10) / 10;
+    setBand(selected, patch);
   }
   function onpointerup() {
     dragging = false;
@@ -195,14 +228,14 @@
   function ondblclick(e: MouseEvent) {
     const [mx, my] = canvasPos(e as unknown as PointerEvent);
     const hit = bandAt(mx, my);
-    if (hit !== null) setBand(hit, { gainDb: 0 });
+    if (hit !== null && hasGain(eq.bands[hit]!.kind)) setBand(hit, { gainDb: 0 });
   }
   function onwheel(e: WheelEvent) {
     e.preventDefault();
     const [mx, my] = canvasPos(e);
     const hit = bandAt(mx, my) ?? selected;
     const b = eq.bands[hit];
-    if (!b) return;
+    if (!b || b.kind === "band_pass") return; // LSP's band-pass has a fixed width
     const dir = e.deltaY < 0 ? 1 : -1;
     const q = Math.max(0.1, Math.min(10, b.q * (dir > 0 ? 1.15 : 1 / 1.15)));
     selected = hit;
@@ -235,10 +268,10 @@
           onchange({
             ...eq,
             bands: [
-              { kind: "low_shelf", freqHz: 100, gainDb: 0, q: 0.7 },
-              { kind: "peak", freqHz: 400, gainDb: 0, q: 1 },
-              { kind: "peak", freqHz: 2500, gainDb: 0, q: 1 },
-              { kind: "high_shelf", freqHz: 8000, gainDb: 0, q: 0.7 },
+              { kind: "low_shelf", freqHz: 100, gainDb: 0, q: 0.7, slope: 0 },
+              { kind: "peak", freqHz: 400, gainDb: 0, q: 1, slope: 0 },
+              { kind: "peak", freqHz: 2500, gainDb: 0, q: 1, slope: 0 },
+              { kind: "high_shelf", freqHz: 8000, gainDb: 0, q: 0.7, slope: 0 },
               ...eq.bands.slice(4),
             ],
           })}
@@ -262,17 +295,52 @@
       {onpointerup}
       {ondblclick}
       {onwheel}
-      title="Drag dots: freq/gain · wheel: Q · double-click: reset band"
+      title="Drag dots: freq/gain (cuts, notch, band: freq only) · wheel: Q · double-click: reset gain"
     ></canvas>
 
     <div class="bands">
       {#each eq.bands.slice(0, 4) as b, i}
-        <button class="band" class:sel={i === selected} onclick={() => (selected = i)}>
+        <button class="band" class:sel={i === selected} title={KIND_TITLE[b.kind]} onclick={() => (selected = i)}>
           <span class="kind">{KIND_LABEL[b.kind]}</span>
-          <span class="vals">{fmtFreq(b.freqHz)}Hz {b.gainDb > 0 ? "+" : ""}{b.gainDb.toFixed(1)}dB Q{b.q.toFixed(1)}</span>
+          <span class="vals">
+            {#if hasGain(b.kind)}
+              {fmtFreq(b.freqHz)}Hz {b.gainDb > 0 ? "+" : ""}{b.gainDb.toFixed(1)}dB Q{b.q.toFixed(1)}
+            {:else if hasSlope(b.kind)}
+              {fmtFreq(b.freqHz)}Hz {SLOPES[b.slope] ?? 12}dB/oct
+            {:else if b.kind === "notch"}
+              {fmtFreq(b.freqHz)}Hz Q{b.q.toFixed(1)}
+            {:else}
+              {fmtFreq(b.freqHz)}Hz ±2 oct
+            {/if}
+          </span>
         </button>
       {/each}
     </div>
+
+    {#if sel}
+      <div class="opts">
+        <span class="optlabel">TYPE</span>
+        <div class="seg" role="radiogroup" aria-label="Band {selected + 1} type">
+          {#each KINDS as k}
+            <button role="radio" aria-checked={sel.kind === k} class:on={sel.kind === k} title={KIND_TITLE[k]} onclick={() => setKind(selected, k)}>
+              {KIND_LABEL[k]}
+            </button>
+          {/each}
+        </div>
+      </div>
+      {#if hasSlope(sel.kind)}
+        <div class="opts">
+          <span class="optlabel">SLOPE</span>
+          <div class="seg" role="radiogroup" aria-label="Band {selected + 1} slope">
+            {#each SLOPES as db, si}
+              <button role="radio" aria-checked={sel.slope === si} class:on={sel.slope === si} onclick={() => setBand(selected, { slope: si })}>
+                {db} dB/oct
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+    {/if}
   </div>
 </div>
 
@@ -383,5 +451,44 @@
     font: 500 9px var(--mono);
     color: var(--text-1);
     white-space: nowrap;
+  }
+  .opts {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .optlabel {
+    width: 38px;
+    flex: none;
+    font: 500 9px var(--mono);
+    letter-spacing: 0.08em;
+    color: var(--text-3);
+  }
+  .seg {
+    flex: 1;
+    display: flex;
+    gap: 2px;
+  }
+  .seg button {
+    flex: 1;
+    height: 20px;
+    padding: 0 2px;
+    font: 500 9px var(--mono);
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+    color: var(--text-3);
+    background: var(--bg-3);
+    border: 1px solid var(--border-0);
+    border-radius: 2px;
+    box-shadow: inset 0 1px 0 var(--hl-top);
+  }
+  .seg button:hover {
+    background: var(--bg-4);
+    color: var(--text-2);
+  }
+  .seg button.on {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: var(--accent-glow);
   }
 </style>

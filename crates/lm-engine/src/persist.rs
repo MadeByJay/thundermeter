@@ -265,7 +265,7 @@ mod tests {
     fn sanitize_preserves_user_eq_bands_while_migrating() {
         let mut s = strip(1, StripKind::Virtual);
         s.eq.bands.truncate(4);
-        s.eq.bands[1] = EqBand { kind: EqBandKind::Peak, freq_hz: 900.0, gain_db: -4.5, q: 2.0 };
+        s.eq.bands[1] = EqBand { kind: EqBandKind::Peak, freq_hz: 900.0, gain_db: -4.5, q: 2.0, slope: 0 };
         let mut p = profile(vec![s]);
         sanitize(&mut p);
         assert_eq!(p.strips[0].eq.bands[1].freq_hz, 900.0);

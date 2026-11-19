@@ -72,6 +72,14 @@ pub enum EqBandKind {
     LowShelf,
     Peak,
     HighShelf,
+    /// Removes everything below the frequency ("low cut").
+    HighPass,
+    /// Removes everything above the frequency ("high cut").
+    LowPass,
+    /// A narrow cut at the frequency (hum, a ringing resonance).
+    Notch,
+    /// Keeps only a range around the frequency.
+    BandPass,
 }
 
 impl EqBandKind {
@@ -79,11 +87,29 @@ impl EqBandKind {
     pub fn lsp_filter_type(&self) -> f32 {
         match self {
             EqBandKind::Peak => 1.0,      // Bell
+            EqBandKind::HighPass => 2.0,  // Hi-pass
             EqBandKind::HighShelf => 3.0, // Hi-shelf
+            EqBandKind::LowPass => 4.0,   // Lo-pass
             EqBandKind::LowShelf => 5.0,  // Lo-shelf
+            EqBandKind::Notch => 6.0,     // Notch
+            EqBandKind::BandPass => 9.0,  // Bandpass
         }
     }
+
+    /// Whether the band has a gain at all. Pass and notch filters only have a
+    /// frequency and Q; their `gain_db` is ignored.
+    pub fn has_gain(&self) -> bool {
+        matches!(self, EqBandKind::LowShelf | EqBandKind::Peak | EqBandKind::HighShelf)
+    }
+
+    /// Whether `EqBand::slope` applies (the cut filters).
+    pub fn has_slope(&self) -> bool {
+        matches!(self, EqBandKind::HighPass | EqBandKind::LowPass)
+    }
 }
+
+/// Highest `EqBand::slope` value: LSP's "x4", 48 dB/octave.
+pub const MAX_EQ_SLOPE: u8 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,6 +118,11 @@ pub struct EqBand {
     pub freq_hz: f32,
     pub gain_db: f32,
     pub q: f32,
+    /// Steepness of a high/low-pass band: 0..=MAX_EQ_SLOPE = 12/24/36/48 dB
+    /// per octave (LSP `s_N` "x1".."x4"). Ignored by other kinds. `default`
+    /// so profiles written before filters existed still load.
+    #[serde(default)]
+    pub slope: u8,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -106,10 +137,10 @@ impl EqParams {
     /// independent of the four user-facing EQ-panel bands.
     pub fn color_defaults() -> [EqBand; 4] {
         [
-            EqBand { kind: EqBandKind::LowShelf, freq_hz: 300.0, gain_db: 0.0, q: 0.7 },
-            EqBand { kind: EqBandKind::Peak, freq_hz: 400.0, gain_db: 0.0, q: 0.8 },
-            EqBand { kind: EqBandKind::Peak, freq_hz: 3000.0, gain_db: 0.0, q: 0.8 },
-            EqBand { kind: EqBandKind::HighShelf, freq_hz: 3500.0, gain_db: 0.0, q: 0.7 },
+            EqBand { kind: EqBandKind::LowShelf, freq_hz: 300.0, gain_db: 0.0, q: 0.7, slope: 0 },
+            EqBand { kind: EqBandKind::Peak, freq_hz: 400.0, gain_db: 0.0, q: 0.8, slope: 0 },
+            EqBand { kind: EqBandKind::Peak, freq_hz: 3000.0, gain_db: 0.0, q: 0.8, slope: 0 },
+            EqBand { kind: EqBandKind::HighShelf, freq_hz: 3500.0, gain_db: 0.0, q: 0.7, slope: 0 },
         ]
     }
 }
@@ -117,10 +148,10 @@ impl EqParams {
 impl Default for EqParams {
     fn default() -> Self {
         let mut bands = vec![
-            EqBand { kind: EqBandKind::LowShelf, freq_hz: 100.0, gain_db: 0.0, q: 0.7 },
-            EqBand { kind: EqBandKind::Peak, freq_hz: 400.0, gain_db: 0.0, q: 1.0 },
-            EqBand { kind: EqBandKind::Peak, freq_hz: 2500.0, gain_db: 0.0, q: 1.0 },
-            EqBand { kind: EqBandKind::HighShelf, freq_hz: 8000.0, gain_db: 0.0, q: 0.7 },
+            EqBand { kind: EqBandKind::LowShelf, freq_hz: 100.0, gain_db: 0.0, q: 0.7, slope: 0 },
+            EqBand { kind: EqBandKind::Peak, freq_hz: 400.0, gain_db: 0.0, q: 1.0, slope: 0 },
+            EqBand { kind: EqBandKind::Peak, freq_hz: 2500.0, gain_db: 0.0, q: 1.0, slope: 0 },
+            EqBand { kind: EqBandKind::HighShelf, freq_hz: 8000.0, gain_db: 0.0, q: 0.7, slope: 0 },
         ];
         bands.extend(Self::color_defaults());
         Self { enabled: false, bands }
@@ -461,6 +492,33 @@ mod tests {
         assert_eq!(serde_json::to_value(EqBandKind::LowShelf).unwrap(), "low_shelf");
         assert_eq!(serde_json::to_value(EqBandKind::Peak).unwrap(), "peak");
         assert_eq!(serde_json::to_value(EqBandKind::HighShelf).unwrap(), "high_shelf");
+        assert_eq!(serde_json::to_value(EqBandKind::HighPass).unwrap(), "high_pass");
+        assert_eq!(serde_json::to_value(EqBandKind::LowPass).unwrap(), "low_pass");
+        assert_eq!(serde_json::to_value(EqBandKind::Notch).unwrap(), "notch");
+        assert_eq!(serde_json::to_value(EqBandKind::BandPass).unwrap(), "band_pass");
+    }
+
+    /// Bands saved before filters existed have no `slope`; they must load as
+    /// the gentlest one rather than failing the whole profile.
+    #[test]
+    fn eq_band_without_slope_loads_as_12_db_per_octave() {
+        let b: EqBand = serde_json::from_str(r#"{"kind":"peak","freqHz":400,"gainDb":-3,"q":1}"#).unwrap();
+        assert_eq!(b.slope, 0);
+        assert_eq!(serde_json::to_value(b).unwrap()["slope"], 0, "and is written back out");
+    }
+
+    #[test]
+    fn only_shelves_and_peaks_have_gain_and_only_cuts_have_slope() {
+        use EqBandKind::*;
+        for k in [LowShelf, Peak, HighShelf] {
+            assert!(k.has_gain() && !k.has_slope(), "{k:?}");
+        }
+        for k in [HighPass, LowPass] {
+            assert!(!k.has_gain() && k.has_slope(), "{k:?}");
+        }
+        for k in [Notch, BandPass] {
+            assert!(!k.has_gain() && !k.has_slope(), "{k:?}");
+        }
     }
 
     #[test]
@@ -537,6 +595,11 @@ mod tests {
         assert_eq!(EqBandKind::Peak.lsp_filter_type(), 1.0);
         assert_eq!(EqBandKind::HighShelf.lsp_filter_type(), 3.0);
         assert_eq!(EqBandKind::LowShelf.lsp_filter_type(), 5.0);
+        // From para_equalizer_x8_stereo.ttl: Hi-pass 2, Lo-pass 4, Notch 6, Bandpass 9.
+        assert_eq!(EqBandKind::HighPass.lsp_filter_type(), 2.0);
+        assert_eq!(EqBandKind::LowPass.lsp_filter_type(), 4.0);
+        assert_eq!(EqBandKind::Notch.lsp_filter_type(), 6.0);
+        assert_eq!(EqBandKind::BandPass.lsp_filter_type(), 9.0);
     }
 
     /// The limiter is the last thing before hardware and the virtual mic, so it

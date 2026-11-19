@@ -28,13 +28,22 @@ export interface LimiterParams {
   releaseMs: number;
 }
 
-export type EqBandKind = "low_shelf" | "peak" | "high_shelf";
+export type EqBandKind = "low_shelf" | "peak" | "high_shelf" | "high_pass" | "low_pass" | "notch" | "band_pass";
+
+/** Mirrors EqBandKind::has_gain: pass and notch filters ignore gainDb. */
+export const hasGain = (k: EqBandKind): boolean => k === "low_shelf" || k === "peak" || k === "high_shelf";
+/** Mirrors EqBandKind::has_slope: only the cut filters use `slope`. */
+export const hasSlope = (k: EqBandKind): boolean => k === "high_pass" || k === "low_pass";
+/** Mirrors lm_protocol::MAX_EQ_SLOPE (x4 = 48 dB/oct). */
+export const MAX_EQ_SLOPE = 3;
 
 export interface EqBand {
   kind: EqBandKind;
   freqHz: number;
   gainDb: number;
   q: number;
+  /** High/low-pass steepness, 0..MAX_EQ_SLOPE = 12/24/36/48 dB per octave. */
+  slope: number;
 }
 
 export interface EqParams {

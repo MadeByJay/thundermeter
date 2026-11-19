@@ -23,7 +23,7 @@ use lm_engine::engine::{self, EngineHandle};
 use lm_engine::params;
 use lm_engine::persist;
 use lm_engine::registry::{parse, GraphModel, PortDirection};
-use lm_protocol::{AppState, BusState, EngineCommand, EngineEvent, EqParams, LimiterParams, StripKind, StripState, Target};
+use lm_protocol::{AppState, BusState, EngineCommand, EngineEvent, EqBandKind, EqParams, LimiterParams, StripKind, StripState, Target};
 
 use pipewire::context::ContextRc;
 use pipewire::core::CoreRc;
@@ -664,6 +664,57 @@ fn bus_eq_shapes_only_the_bus() {
     rig.settle(300);
     let bypassed = rig.measure(&bus_meter, 300)[0];
     assert!((bypassed - bus_before).abs() < 1.0, "bypass left the bus at {bypassed} dBFS, was {bus_before}");
+}
+
+/// Set bus EQ band 0 to one filter (the other plugin bands stay at their
+/// default, Off) and return the bus peak it leaves. Keys and values are the
+/// ones `engine::eq_props` sends.
+fn bus_peak_through(rig: &Rig, b: &BusState, meter: &MeterAccum, kind: EqBandKind, hz: f32, q: f32, slope: f32) -> f32 {
+    rig.set_props(
+        &b.in_node(),
+        &params::filter_params(&[
+            ("eq:enabled", 1.0),
+            ("eq:ft_0", kind.lsp_filter_type()),
+            ("eq:f_0", hz),
+            ("eq:g_0", 1.0),
+            ("eq:q_0", q),
+            ("eq:s_0", slope),
+        ]),
+    );
+    rig.settle(400);
+    rig.measure(meter, 300)[0]
+}
+
+/// The cut, notch and band-pass types must reach the plugin and do what the
+/// panel draws (`src/lib/utils/eq.ts` models these measurements): a 1 kHz
+/// tone an octave below a 2 kHz high-pass loses ~12 dB at x1 and four times
+/// that at x4 (each step cascades another section); a notch on it removes
+/// it; LSP's band-pass is a fixed band with 6 dB/oct skirts from f/4 to 4f,
+/// so centred on the tone it passes and three octaves away it costs ~7 dB.
+#[test]
+#[ignore = "requires a PipeWire daemon; run with `make test-audio`"]
+fn bus_filters_cut_where_the_panel_says() {
+    let (rig, _strip_meter, bus_meter, _s, b) = full_chain(0.5); // 1 kHz, -6 dBFS
+    let flat = rig.measure(&bus_meter, 300)[0];
+    assert!(flat > -20.0, "no signal to filter (peak {flat} dBFS)");
+
+    let hp_x1 = bus_peak_through(&rig, &b, &bus_meter, EqBandKind::HighPass, 2000.0, 0.707, 0.0) - flat;
+    let hp_x4 = bus_peak_through(&rig, &b, &bus_meter, EqBandKind::HighPass, 2000.0, 0.707, 3.0) - flat;
+    let notch = bus_peak_through(&rig, &b, &bus_meter, EqBandKind::Notch, 1000.0, 4.0, 0.0) - flat;
+    let bp_on = bus_peak_through(&rig, &b, &bus_meter, EqBandKind::BandPass, 1000.0, 1.0, 0.0) - flat;
+    let bp_off = bus_peak_through(&rig, &b, &bus_meter, EqBandKind::BandPass, 8000.0, 2.0, 0.0) - flat;
+    let lp_above = bus_peak_through(&rig, &b, &bus_meter, EqBandKind::LowPass, 8000.0, 0.707, 3.0) - flat;
+    eprintln!(
+        "measured change at 1 kHz: hp2k x1 {hp_x1:.1} dB, hp2k x4 {hp_x4:.1} dB, notch {notch:.1} dB, \
+         bp1k {bp_on:.1} dB, bp8k {bp_off:.1} dB, lp8k x4 {lp_above:.1} dB"
+    );
+
+    assert!((-18.0..=-6.0).contains(&hp_x1), "12 dB/oct high-pass an octave up cut {hp_x1} dB, expected about -12");
+    assert!((hp_x4 - 4.0 * hp_x1).abs() < 3.0, "x4 cut {hp_x4} dB, expected four x1 sections ({hp_x1} each); the slope is not reaching the plugin");
+    assert!(notch < -20.0, "a notch on the tone only cut {notch} dB");
+    assert!(bp_on.abs() < 3.0, "a band-pass centred on the tone changed it by {bp_on} dB");
+    assert!((-9.0..=-5.0).contains(&bp_off), "a band-pass three octaves away cut {bp_off} dB, expected about -7");
+    assert!(lp_above.abs() < 1.5, "a low-pass three octaves above the tone changed it by {lp_above} dB");
 }
 
 /// The gate threshold is written as linear gain. A gate set well above the

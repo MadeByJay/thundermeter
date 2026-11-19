@@ -42,14 +42,14 @@ function simLevel(s: Sim, t: number, dt: number): number {
 const defaultEq = () => ({
   enabled: false,
   bands: [
-    { kind: "low_shelf" as const, freqHz: 100, gainDb: 0, q: 0.7 },
-    { kind: "peak" as const, freqHz: 400, gainDb: 0, q: 1 },
-    { kind: "peak" as const, freqHz: 2500, gainDb: 0, q: 1 },
-    { kind: "high_shelf" as const, freqHz: 8000, gainDb: 0, q: 0.7 },
-    { kind: "low_shelf" as const, freqHz: 300, gainDb: 0, q: 0.7 },
-    { kind: "peak" as const, freqHz: 400, gainDb: 0, q: 0.8 },
-    { kind: "peak" as const, freqHz: 3000, gainDb: 0, q: 0.8 },
-    { kind: "high_shelf" as const, freqHz: 3500, gainDb: 0, q: 0.7 },
+    { kind: "low_shelf" as const, freqHz: 100, gainDb: 0, q: 0.7, slope: 0 },
+    { kind: "peak" as const, freqHz: 400, gainDb: 0, q: 1, slope: 0 },
+    { kind: "peak" as const, freqHz: 2500, gainDb: 0, q: 1, slope: 0 },
+    { kind: "high_shelf" as const, freqHz: 8000, gainDb: 0, q: 0.7, slope: 0 },
+    { kind: "low_shelf" as const, freqHz: 300, gainDb: 0, q: 0.7, slope: 0 },
+    { kind: "peak" as const, freqHz: 400, gainDb: 0, q: 0.8, slope: 0 },
+    { kind: "peak" as const, freqHz: 3000, gainDb: 0, q: 0.8, slope: 0 },
+    { kind: "high_shelf" as const, freqHz: 3500, gainDb: 0, q: 0.7, slope: 0 },
   ],
 });
 const defaultGate = () => ({ enabled: false, thresholdDb: -40, attackMs: 20, releaseMs: 100, holdMs: 50 });

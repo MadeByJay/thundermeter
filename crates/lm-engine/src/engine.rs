@@ -498,13 +498,7 @@ impl Engine {
     }
 
     fn apply_eq_to(&self, node_name: &str, e: &EqParams) {
-        let mut pairs: Vec<(String, f32)> = vec![("eq:enabled".into(), e.enabled as u32 as f32)];
-        for (i, band) in e.bands.iter().enumerate().take(8) {
-            pairs.push((format!("eq:ft_{i}"), band.kind.lsp_filter_type()));
-            pairs.push((format!("eq:f_{i}"), band.freq_hz.clamp(10.0, 24000.0)));
-            pairs.push((format!("eq:g_{i}"), params::db_to_linear(band.gain_db)));
-            pairs.push((format!("eq:q_{i}"), band.q.clamp(0.0, 100.0)));
-        }
+        let pairs = eq_props(e);
         let borrowed: Vec<(&str, f32)> = pairs.iter().map(|(k, v)| (k.as_str(), *v)).collect();
         self.set_props(node_name, &params::filter_params(&borrowed));
     }
@@ -788,6 +782,24 @@ fn bus(id: BusId, label: &str, target: Option<String>) -> BusState {
     }
 }
 
+/// LSP para_equalizer control values for an EQ. Gainless kinds get 0 dB and
+/// only the cut filters get a slope, so a band switched from a peak to a
+/// notch (or from a high-pass to a shelf) carries nothing stale into the
+/// plugin that the panel's curve does not show.
+fn eq_props(e: &EqParams) -> Vec<(String, f32)> {
+    let mut pairs: Vec<(String, f32)> = vec![("eq:enabled".into(), e.enabled as u32 as f32)];
+    for (i, band) in e.bands.iter().enumerate().take(8) {
+        let gain_db = if band.kind.has_gain() { band.gain_db } else { 0.0 };
+        let slope = if band.kind.has_slope() { band.slope.min(lm_protocol::MAX_EQ_SLOPE) } else { 0 };
+        pairs.push((format!("eq:ft_{i}"), band.kind.lsp_filter_type()));
+        pairs.push((format!("eq:f_{i}"), band.freq_hz.clamp(10.0, 24000.0)));
+        pairs.push((format!("eq:g_{i}"), params::db_to_linear(gain_db)));
+        pairs.push((format!("eq:q_{i}"), band.q.clamp(0.0, 100.0)));
+        pairs.push((format!("eq:s_{i}"), slope as f32));
+    }
+    pairs
+}
+
 /// Whether two mixers can share one live graph: the same strips (id, kind,
 /// capture device, in order — meter frames are indexed by position) and the
 /// same buses (id, output device). Labels, levels, DSP and routes may differ;
@@ -1024,6 +1036,7 @@ fn parse_default_name(value: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lm_protocol::{EqBand, EqBandKind};
 
     fn strip(id: StripId, kind: StripKind, hw: Option<&str>) -> StripState {
         StripState {
@@ -1062,6 +1075,37 @@ mod tests {
         b2[0].delay_ms = 40.0;
         b2[0].limiter.enabled = false;
         assert!(same_layout(&s, &b, &s2, &b2));
+    }
+
+    fn prop(pairs: &[(String, f32)], key: &str) -> f32 {
+        pairs.iter().find(|(k, _)| k == key).unwrap_or_else(|| panic!("no {key}")).1
+    }
+
+    #[test]
+    fn cut_filters_send_their_slope_and_no_gain() {
+        let mut eq = EqParams::default();
+        eq.bands[0] = EqBand { kind: EqBandKind::HighPass, freq_hz: 80.0, gain_db: 9.0, q: 0.7, slope: 2 };
+        eq.bands[3] = EqBand { kind: EqBandKind::LowPass, freq_hz: 12000.0, gain_db: 0.0, q: 0.7, slope: 200 };
+        let p = eq_props(&eq);
+        assert_eq!(prop(&p, "eq:ft_0"), 2.0, "LSP Hi-pass");
+        assert_eq!(prop(&p, "eq:s_0"), 2.0, "x3 = 36 dB/oct");
+        assert_eq!(prop(&p, "eq:g_0"), 1.0, "a high-pass has no gain: unity, whatever was stored");
+        assert_eq!(prop(&p, "eq:ft_3"), 4.0, "LSP Lo-pass");
+        assert_eq!(prop(&p, "eq:s_3"), 3.0, "slope is clamped to x4");
+    }
+
+    #[test]
+    fn other_kinds_never_carry_a_slope() {
+        let mut eq = EqParams::default();
+        eq.bands[1] = EqBand { kind: EqBandKind::Peak, freq_hz: 400.0, gain_db: -6.0, q: 1.0, slope: 3 };
+        eq.bands[2] = EqBand { kind: EqBandKind::Notch, freq_hz: 60.0, gain_db: -6.0, q: 8.0, slope: 3 };
+        let p = eq_props(&eq);
+        assert_eq!(prop(&p, "eq:s_1"), 0.0, "a peak left over from a high-pass must not stay steep");
+        assert!((prop(&p, "eq:g_1") - params::db_to_linear(-6.0)).abs() < 1e-6, "peaks keep their gain");
+        assert_eq!(prop(&p, "eq:s_2"), 0.0);
+        assert_eq!(prop(&p, "eq:g_2"), 1.0, "a notch has no gain");
+        assert_eq!(prop(&p, "eq:ft_2"), 6.0, "LSP Notch");
+        assert_eq!(p.iter().filter(|(k, _)| k.starts_with("eq:s_")).count(), 8, "every band gets a slope");
     }
 
     /// Anything a module is built from forces a rebuild.
