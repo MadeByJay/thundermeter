@@ -246,6 +246,8 @@ pub struct AppState {
     pub buses: Vec<BusState>,
     pub devices: Vec<DeviceInfo>,
     pub profile_name: String,
+    /// Every saved profile name, sorted for the menu; includes `profile_name`.
+    pub profiles: Vec<String>,
     /// True while linuxmeeter's System strip is the system default output.
     pub take_default_output: bool,
 }
@@ -294,6 +296,16 @@ pub enum EngineCommand {
     /// in the webview, so a mixer sitting in the tray stops paying for meters
     /// nobody can see. Audio is unaffected either way.
     SetMetersEnabled { on: bool },
+    /// Switch to a saved profile. The current one is saved first. If both have
+    /// the same strips and bus devices the new settings are applied to the
+    /// live graph (no audio drop); otherwise the graph is rebuilt.
+    LoadProfile { name: String },
+    /// Save the current mixer under a new name and make that the active profile.
+    SaveProfileAs { name: String },
+    /// Rename a saved profile (the active one included). Refuses to overwrite.
+    RenameProfile { from: String, to: String },
+    /// Delete a saved profile. The active profile cannot be deleted.
+    DeleteProfile { name: String },
     Shutdown,
 }
 
@@ -416,11 +428,13 @@ mod tests {
                 channels: 2,
             }],
             profile_name: "Default".into(),
+            profiles: vec!["Default".into(), "Gaming".into()],
             take_default_output: true,
         })
         .expect("serialize");
 
         assert!(json.get("profileName").is_some());
+        assert_eq!(json["profiles"], serde_json::json!(["Default", "Gaming"]));
         assert!(json.get("takeDefaultOutput").is_some());
         assert!(json.get("profile_name").is_none(), "snake_case would break the frontend");
 
@@ -483,6 +497,10 @@ mod tests {
             EngineCommand::SetBusEqParams { bus: BusId::A1, params: EqParams::default() },
             EngineCommand::SetDefaultOutput { on: true },
             EngineCommand::SetMetersEnabled { on: false },
+            EngineCommand::LoadProfile { name: "Gaming".into() },
+            EngineCommand::SaveProfileAs { name: "Late night".into() },
+            EngineCommand::RenameProfile { from: "Late night".into(), to: "Night".into() },
+            EngineCommand::DeleteProfile { name: "Night".into() },
             EngineCommand::Shutdown,
         ];
         for cmd in cmds {

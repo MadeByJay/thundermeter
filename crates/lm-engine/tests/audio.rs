@@ -14,14 +14,16 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use lm_engine::filterchain::{bus_args, virtual_strip_args, LoadedModule};
 use lm_engine::links::LinkManager;
 use lm_engine::meter::{MeterAccum, MeterTap};
+use lm_engine::engine::{self, EngineHandle};
 use lm_engine::params;
+use lm_engine::persist;
 use lm_engine::registry::{parse, GraphModel, PortDirection};
-use lm_protocol::{BusState, EqParams, LimiterParams, StripKind, StripState};
+use lm_protocol::{AppState, BusState, EngineCommand, EngineEvent, EqParams, LimiterParams, StripKind, StripState, Target};
 
 use pipewire::context::ContextRc;
 use pipewire::core::CoreRc;
@@ -213,6 +215,11 @@ impl Rig {
         self.state.borrow().model.node_by_name(name).is_some()
     }
 
+    /// The node's PipeWire global id: a new id under the same name means the
+    /// node was destroyed and re-created.
+    fn node_id(&self, name: &str) -> Option<u32> {
+        self.state.borrow().model.node_by_name(name).map(|n| n.id)
+    }
 
     fn node_media_class(&self, name: &str) -> Option<String> {
         self.state.borrow().model.node_by_name(name).map(|n| n.media_class.clone())
@@ -694,4 +701,143 @@ fn gate_threshold_opens_and_closes_the_signal() {
         "gate made little difference: closed {closed:.1} dBFS vs open {open:.1} dBFS"
     );
     assert!(open > -20.0, "gate never reopened (peak {open} dBFS)");
+}
+
+// ---- the assembled engine ----------------------------------------------------
+
+/// Pump the rig's loop until the engine emits a State matching `pred`.
+fn wait_state(rig: &Rig, eng: &EngineHandle, what: &str, pred: impl Fn(&AppState) -> bool) -> AppState {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut last = None;
+    while Instant::now() < deadline {
+        rig.settle(50);
+        while let Ok(ev) = eng.evt_rx.try_recv() {
+            if let EngineEvent::State(s) = ev {
+                if pred(&s) {
+                    return s;
+                }
+                last = Some((s.profile_name, s.profiles, s.strips.len()));
+            }
+        }
+    }
+    panic!("timed out waiting for {what}; last state (profile, profiles, strips): {last:?}");
+}
+
+/// Loudest peak the engine's own meter reported for strip `idx` over `ms`.
+fn engine_strip_peak(rig: &Rig, eng: &EngineHandle, idx: usize, ms: u64) -> f32 {
+    while eng.evt_rx.try_recv().is_ok() {} // drop frames from before the window
+    let end = Instant::now() + Duration::from_millis(ms);
+    let mut peak = f32::NEG_INFINITY;
+    while Instant::now() < end {
+        rig.settle(40);
+        while let Ok(ev) = eng.evt_rx.try_recv() {
+            if let EngineEvent::Meters(f) = ev {
+                if let Some(ch) = f.strips.get(idx) {
+                    peak = peak.max(ch[0]);
+                }
+            }
+        }
+    }
+    peak
+}
+
+fn send(eng: &EngineHandle, cmd: EngineCommand) {
+    eng.cmd_tx.send(cmd).expect("engine thread is gone");
+}
+
+/// Profiles end to end through the real engine. Switching between profiles
+/// with the same layout must change what you hear without destroying a single
+/// node — an app playing into a strip keeps its device. A different layout
+/// must rebuild. Saving, renaming and deleting must hit the profile files, and
+/// shutting down must leave no `lm.*` engine node behind.
+#[test]
+#[ignore = "requires a PipeWire daemon; run with `make test-audio`"]
+fn engine_switches_profiles_live_or_by_rebuild() {
+    let mut rig = Rig::new();
+    // The harness points XDG_CONFIG_HOME at a throwaway dir; start it empty.
+    let _ = std::fs::remove_dir_all(persist::config_dir());
+
+    let eng = engine::spawn();
+    let st = wait_state(&rig, &eng, "the default graph", |s| s.strips.iter().any(|x| x.label == "System"));
+    let idx = st.strips.iter().position(|s| s.label == "System").unwrap();
+    let system = st.strips[idx].clone();
+    let system_node = system.node_base();
+    assert_eq!(st.profile_name, "Default");
+    assert_eq!(st.profiles, ["Default"]);
+
+    // An "app" playing into the System strip, linked by name like any client.
+    rig.tone("lm.test.tone", 1000.0, 0.5);
+    rig.settle(200);
+    rig.route("lm.test.tone", &system_node, true);
+    let rig = &rig; // read-only from here on
+    rig.settle(600);
+    let loud = engine_strip_peak(rig, &eng, idx, 400);
+    assert!((loud - -6.02).abs() < 1.5, "System strip at {loud} dBFS, expected about -6");
+
+    // Save a copy and turn System down in it.
+    send(&eng, EngineCommand::SaveProfileAs { name: "Quiet".into() });
+    let st = wait_state(rig, &eng, "Quiet to become active", |s| s.profile_name == "Quiet");
+    assert_eq!(st.profiles, ["Default", "Quiet"]);
+    send(&eng, EngineCommand::SetGain { target: Target::Strip { strip: system.id }, db: -12.0 });
+    rig.settle(300);
+    let quiet = engine_strip_peak(rig, &eng, idx, 400);
+    assert!((quiet - loud + 12.0).abs() < 1.5, "gain -12 gave {quiet} dBFS from {loud}");
+
+    // Same layout: switching must change the level and keep every node.
+    let id_before = rig.node_id(&system_node).expect("System node");
+    send(&eng, EngineCommand::LoadProfile { name: "Default".into() });
+    wait_state(rig, &eng, "Default to load", |s| s.profile_name == "Default");
+    rig.settle(300);
+    let back = engine_strip_peak(rig, &eng, idx, 400);
+    assert!((back - loud).abs() < 1.5, "switching to Default left System at {back} dBFS, expected {loud}");
+    assert_eq!(rig.node_id(&system_node), Some(id_before), "a same-layout switch re-created the strip node");
+
+    send(&eng, EngineCommand::LoadProfile { name: "Quiet".into() });
+    wait_state(rig, &eng, "Quiet to load", |s| s.profile_name == "Quiet");
+    rig.settle(300);
+    let again = engine_strip_peak(rig, &eng, idx, 400);
+    assert!((again - quiet).abs() < 1.5, "switching to Quiet gave {again} dBFS, expected {quiet}");
+    assert_eq!(rig.node_id(&system_node), Some(id_before), "a same-layout switch re-created the strip node");
+
+    // A different layout (one more strip) must rebuild.
+    let mut big = persist::load_profile("Quiet").expect("Quiet was saved");
+    let mut extra = big.strips.last().unwrap().clone();
+    extra.id = 9;
+    extra.label = "Extra".into();
+    big.strips.push(extra);
+    persist::save_profile("Rebuilt", &big).unwrap();
+    send(&eng, EngineCommand::LoadProfile { name: "Rebuilt".into() });
+    let st = wait_state(rig, &eng, "Rebuilt to load", |s| s.profile_name == "Rebuilt" && s.strips.len() == big.strips.len());
+    assert_eq!(st.profiles, ["Default", "Quiet", "Rebuilt"]);
+    rig.settle(800);
+    assert!(rig.node_exists("lm.strip.9"), "the new strip's device did not appear");
+    let id_after = rig.node_id(&system_node).expect("System node after rebuild");
+    assert_ne!(id_after, id_before, "a layout change must rebuild the graph");
+    assert!(engine_strip_peak(rig, &eng, idx, 400) > -60.0, "audio did not return after the rebuild");
+
+    // Delete refuses the active profile; rename moves the active one.
+    send(&eng, EngineCommand::DeleteProfile { name: "Rebuilt".into() });
+    send(&eng, EngineCommand::DeleteProfile { name: "Quiet".into() });
+    wait_state(rig, &eng, "Quiet to be deleted", |s| s.profiles == ["Default", "Rebuilt"]);
+    send(&eng, EngineCommand::RenameProfile { from: "Rebuilt".into(), to: "Big".into() });
+    let st = wait_state(rig, &eng, "the rename", |s| s.profile_name == "Big");
+    assert_eq!(st.profiles, ["Big", "Default"]);
+    assert_eq!(persist::list_profiles(), ["Big", "Default"], "files on disk match the menu");
+
+    // Clean exit: nothing of the engine's may outlive it.
+    send(&eng, EngineCommand::Shutdown);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        rig.settle(50);
+        match eng.evt_rx.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            _ if Instant::now() > deadline => panic!("engine did not stop"),
+            _ => {}
+        }
+    }
+    rig.settle(500);
+    let leftovers: Vec<String> =
+        rig.node_names_starting_with("lm.").into_iter().filter(|n| !n.starts_with("lm.test")).collect();
+    assert!(leftovers.is_empty(), "engine left nodes behind: {leftovers:?}");
+    assert_eq!(persist::load_config().last_profile, "Big", "the active profile is remembered");
 }

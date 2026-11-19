@@ -76,6 +76,26 @@ fn set_bus_delay(data: tauri::State<AppData>, bus: BusId, ms: f32) -> Result<(),
 }
 
 #[tauri::command]
+fn load_profile(data: tauri::State<AppData>, name: String) -> Result<(), String> {
+    send(&data, EngineCommand::LoadProfile { name })
+}
+
+#[tauri::command]
+fn save_profile_as(data: tauri::State<AppData>, name: String) -> Result<(), String> {
+    send(&data, EngineCommand::SaveProfileAs { name })
+}
+
+#[tauri::command]
+fn rename_profile(data: tauri::State<AppData>, from: String, to: String) -> Result<(), String> {
+    send(&data, EngineCommand::RenameProfile { from, to })
+}
+
+#[tauri::command]
+fn delete_profile(data: tauri::State<AppData>, name: String) -> Result<(), String> {
+    send(&data, EngineCommand::DeleteProfile { name })
+}
+
+#[tauri::command]
 fn set_bus_eq_params(data: tauri::State<AppData>, bus: BusId, params: EqParams) -> Result<(), String> {
     send(&data, EngineCommand::SetBusEqParams { bus, params })
 }
@@ -165,6 +185,10 @@ fn main() {
             set_limiter_params,
             set_bus_delay,
             set_bus_eq_params,
+            load_profile,
+            save_profile_as,
+            rename_profile,
+            delete_profile,
             set_strip_device,
             set_bus_target,
             set_default_output,

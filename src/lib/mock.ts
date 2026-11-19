@@ -65,6 +65,7 @@ const routes = (on: BusId[]): Record<BusId, boolean> => ({
 
 const state: AppState = {
   profileName: "Default",
+  profiles: ["Default", "Gaming", "Late night"],
   takeDefaultOutput: false,
   strips: [
     { id: 1, kind: "hardware", label: "Mic", hwKey: "alsa_input.usb-ZOOM_Corporation_UAC-2", online: true, gainDb: -4, mute: false, solo: false, routes: routes(["A2", "B1"]), gate: defaultGate(), comp: defaultComp(), eq: defaultEq() },
@@ -106,6 +107,31 @@ let mockAutostart = false;
  *  $state carry reactive proxies, which structuredClone refuses (the Tauri
  *  path serializes to JSON, so this matches what the real backend receives). */
 const plainCopy = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+
+/** Saved profiles, as the engine would hold them on disk. Every mock profile
+ *  shares the demo layout, so switching is the live (no-rebuild) kind. */
+type Snapshot = Pick<AppState, "strips" | "buses" | "takeDefaultOutput">;
+const snapshot = (): Snapshot =>
+  structuredClone({ strips: state.strips, buses: state.buses, takeDefaultOutput: state.takeDefaultOutput });
+const saved = new Map<string, Snapshot>();
+saved.set("Default", snapshot());
+{
+  const gaming = snapshot();
+  gaming.strips.find((s) => s.label === "Chat")!.gainDb = 0;
+  gaming.strips.find((s) => s.label === "Music")!.gainDb = -14;
+  saved.set("Gaming", gaming);
+  const night = snapshot();
+  for (const b of night.buses) if (b.id === "A1") b.gainDb = -18;
+  saved.set("Late night", night);
+}
+const sortNames = (names: string[]) => names.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
+
+/** Push the whole state to subscribers, like the engine's state_changed. */
+function emit(): void {
+  state.profiles = sortNames([...saved.keys()]);
+  const s = structuredClone(state);
+  for (const cb of stateSubs) cb(s);
+}
 
 const meterSubs = new Set<(f: MeterFrame) => void>();
 const stateSubs = new Set<(s: AppState) => void>();
@@ -211,6 +237,38 @@ export const mockIpc: Ipc = {
   },
   setDefaultOutput: (on) => {
     state.takeDefaultOutput = on;
+    return Promise.resolve();
+  },
+  loadProfile: (name) => {
+    const target = saved.get(name);
+    if (target && name !== state.profileName) {
+      saved.set(state.profileName, snapshot());
+      Object.assign(state, structuredClone(target));
+      state.profileName = name;
+    }
+    emit();
+    return Promise.resolve();
+  },
+  saveProfileAs: (name) => {
+    saved.set(state.profileName, snapshot());
+    saved.set(name, snapshot());
+    state.profileName = name;
+    emit();
+    return Promise.resolve();
+  },
+  renameProfile: (from, to) => {
+    const snap = saved.get(from);
+    if (snap && !saved.has(to)) {
+      saved.delete(from);
+      saved.set(to, from === state.profileName ? snapshot() : snap);
+      if (from === state.profileName) state.profileName = to;
+    }
+    emit();
+    return Promise.resolve();
+  },
+  deleteProfile: (name) => {
+    if (name !== state.profileName) saved.delete(name);
+    emit();
     return Promise.resolve();
   },
   getAutostart: () => Promise.resolve(mockAutostart),

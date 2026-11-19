@@ -33,6 +33,12 @@ impl LinkManager {
         }
     }
 
+    /// Forget every route and tear down every link we hold (profile rebuild).
+    pub fn clear(&mut self) {
+        self.desired.clear();
+        self.held.clear(); // proxy drop == link teardown (object.linger=false)
+    }
+
     pub fn desired(&self) -> impl Iterator<Item = &Route> {
         self.desired.iter()
     }

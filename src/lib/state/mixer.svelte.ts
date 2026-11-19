@@ -14,6 +14,7 @@ class MixerStore {
   buses = $state<BusState[]>([]);
   devices = $state<DeviceInfo[]>([]);
   profileName = $state("Default");
+  profiles = $state<string[]>([]);
   takeDefaultOutput = $state(false);
   ready = $state(false);
   error = $state<string | null>(null);
@@ -70,6 +71,7 @@ class MixerStore {
     }
     this.devices = s.devices;
     this.profileName = s.profileName;
+    this.profiles = s.profiles;
     this.takeDefaultOutput = s.takeDefaultOutput;
   }
 
@@ -178,6 +180,24 @@ class MixerStore {
     const b = this.bus(bus);
     if (b) b.targetHwKey = hwKey;
     void ipc.setBusTarget(bus, hwKey);
+  }
+
+  // Profile changes are not optimistic: the engine may refuse (bad name, file
+  // error) and answers every one with a full state_changed, which #apply takes.
+  loadProfile(name: string): void {
+    if (name !== this.profileName) void ipc.loadProfile(name);
+  }
+
+  saveProfileAs(name: string): void {
+    void ipc.saveProfileAs(name);
+  }
+
+  renameProfile(from: string, to: string): void {
+    void ipc.renameProfile(from, to);
+  }
+
+  deleteProfile(name: string): void {
+    if (name !== this.profileName) void ipc.deleteProfile(name);
   }
 
   setDefaultOutput(on: boolean): void {

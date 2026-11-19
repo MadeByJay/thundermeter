@@ -50,8 +50,77 @@ pub fn save_config(config: &Config) -> io::Result<()> {
     atomic_write(&config_dir().join("config.toml"), &toml)
 }
 
+pub fn profiles_dir() -> PathBuf {
+    config_dir().join("profiles")
+}
+
+/// Longest profile name accepted, in characters.
+pub const MAX_PROFILE_NAME: usize = 48;
+
+/// Profile names arrive from the UI and become file names, so anything that
+/// could escape `profiles/` or hide the file is refused. Mirrors
+/// `validProfileName` in `src/lib/utils/profile.ts`.
+pub fn valid_profile_name(name: &str) -> bool {
+    let n = name.chars().count();
+    n > 0
+        && n <= MAX_PROFILE_NAME
+        && name.trim() == name
+        && !name.starts_with('.')
+        && !name.chars().any(|c| c == '/' || c == '\\' || c.is_control())
+}
+
+/// Every saved profile, sorted case-insensitively for the menu.
+pub fn list_profiles() -> Vec<String> {
+    list_profiles_in(&profiles_dir())
+}
+
+fn list_profiles_in(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
+    let mut names: Vec<String> = entries
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let path = e.path();
+            // `x.toml.tmp` (an interrupted atomic write) has extension "tmp".
+            (path.extension()? == "toml").then(|| path.file_stem()?.to_str().map(String::from))?
+        })
+        .filter(|n| valid_profile_name(n))
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names
+}
+
+pub fn rename_profile(from: &str, to: &str) -> io::Result<()> {
+    rename_profile_in(&profiles_dir(), from, to)
+}
+
+fn rename_profile_in(dir: &std::path::Path, from: &str, to: &str) -> io::Result<()> {
+    if !valid_profile_name(from) || !valid_profile_name(to) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid profile name"));
+    }
+    let target = dir.join(format!("{to}.toml"));
+    if target.exists() {
+        return Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("profile {to} already exists")));
+    }
+    fs::rename(dir.join(format!("{from}.toml")), target)
+}
+
+pub fn delete_profile(name: &str) -> io::Result<()> {
+    delete_profile_in(&profiles_dir(), name)
+}
+
+fn delete_profile_in(dir: &std::path::Path, name: &str) -> io::Result<()> {
+    if !valid_profile_name(name) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid profile name"));
+    }
+    fs::remove_file(dir.join(format!("{name}.toml")))
+}
+
 pub fn load_profile(name: &str) -> Option<Profile> {
-    let path = config_dir().join("profiles").join(format!("{name}.toml"));
+    if !valid_profile_name(name) {
+        tracing::warn!("refusing to load profile with invalid name {name:?}");
+        return None;
+    }
+    let path = profiles_dir().join(format!("{name}.toml"));
     let text = fs::read_to_string(&path).ok()?;
     match toml::from_str::<Profile>(&text) {
         Ok(mut p) => {
@@ -67,7 +136,10 @@ pub fn load_profile(name: &str) -> Option<Profile> {
 }
 
 pub fn save_profile(name: &str, profile: &Profile) -> io::Result<()> {
-    let dir = config_dir().join("profiles");
+    if !valid_profile_name(name) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid profile name"));
+    }
+    let dir = profiles_dir();
     fs::create_dir_all(&dir)?;
     let toml = toml::to_string_pretty(profile).map_err(io::Error::other)?;
     atomic_write(&dir.join(format!("{name}.toml")), &toml)
@@ -313,6 +385,58 @@ releaseMs = 50.0
             sanitize(&mut p);
             assert_eq!(p.buses[0].delay_ms, loaded, "delayMs = {written} in the profile");
         }
+    }
+
+    /// A fresh, empty directory per test (tests run in parallel).
+    fn scratch_dir(tag: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let dir = std::env::temp_dir().join(format!("lm-persist-{tag}-{}-{nanos}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// Names become file names: nothing may climb out of profiles/, hide the
+    /// file, or carry invisible characters.
+    #[test]
+    fn profile_names_cannot_escape_the_profiles_dir() {
+        for ok in ["Default", "Gaming", "Stream (late)", "music-2", "Café"] {
+            assert!(valid_profile_name(ok), "{ok:?} should be allowed");
+        }
+        let long = "x".repeat(MAX_PROFILE_NAME + 1);
+        for bad in ["", " ", " lead", "trail ", ".hidden", "..", "../etc", "a/b", "a\\b", "tab\there", "nul\0", long.as_str()] {
+            assert!(!valid_profile_name(bad), "{bad:?} should be refused");
+        }
+    }
+
+    #[test]
+    fn listing_shows_profiles_only_sorted_case_insensitively() {
+        let dir = scratch_dir("list");
+        for f in ["zeta.toml", "Alpha.toml", "beta.toml", "half.toml.tmp", "notes.txt", ".hidden.toml"] {
+            fs::write(dir.join(f), "").unwrap();
+        }
+        assert_eq!(list_profiles_in(&dir), ["Alpha", "beta", "zeta"]);
+        assert!(list_profiles_in(&dir.join("missing")).is_empty(), "no profiles dir yet is not an error");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn rename_refuses_to_overwrite_and_delete_removes() {
+        let dir = scratch_dir("rename");
+        fs::write(dir.join("A.toml"), "a").unwrap();
+        fs::write(dir.join("B.toml"), "b").unwrap();
+
+        let err = rename_profile_in(&dir, "A", "B").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(fs::read_to_string(dir.join("B.toml")).unwrap(), "b", "existing profile untouched");
+
+        rename_profile_in(&dir, "A", "C").unwrap();
+        assert_eq!(list_profiles_in(&dir), ["B", "C"]);
+        assert_eq!(rename_profile_in(&dir, "C", "../x").unwrap_err().kind(), io::ErrorKind::InvalidInput);
+
+        delete_profile_in(&dir, "B").unwrap();
+        assert_eq!(list_profiles_in(&dir), ["C"]);
+        assert_eq!(delete_profile_in(&dir, "../C").unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

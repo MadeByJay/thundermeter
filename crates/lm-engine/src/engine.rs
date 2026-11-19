@@ -77,6 +77,7 @@ struct Engine {
 impl Engine {
     fn send_state(&mut self) {
         self.refresh_devices();
+        self.refresh_profiles();
         self.dirty = true;
         let _ = self.evt_tx.send(EngineEvent::State(self.app.clone()));
     }
@@ -120,6 +121,25 @@ impl Engine {
         self.app.devices = devices;
     }
 
+    fn refresh_profiles(&mut self) {
+        let mut names = crate::persist::list_profiles();
+        // The active profile belongs in the menu even before its first save.
+        if !self.app.profile_name.is_empty() && !names.contains(&self.app.profile_name) {
+            names.push(self.app.profile_name.clone());
+            names.sort_by_key(|n| n.to_lowercase());
+        }
+        self.app.profiles = names;
+    }
+
+    /// Hardware strips are online iff their capture device exists right now.
+    fn mark_hardware_online(&mut self) {
+        for s in &mut self.app.strips {
+            if s.kind == StripKind::Hardware {
+                s.online = s.hw_key.as_deref().is_some_and(|k| self.model.nodes.values().any(|n| n.name == k));
+            }
+        }
+    }
+
     // ---- graph construction -------------------------------------------------
 
     fn build_graph(&mut self) {
@@ -132,14 +152,7 @@ impl Engine {
             self.app.buses = p.buses;
             self.app.take_default_output = p.take_default_output;
             self.app.profile_name = profile_name;
-            for s in &mut self.app.strips {
-                if s.kind == StripKind::Hardware {
-                    s.online = s
-                        .hw_key
-                        .as_deref()
-                        .is_some_and(|k| self.model.nodes.values().any(|n| n.name == k));
-                }
-            }
+            self.mark_hardware_online();
             self.finish_build();
             return;
         }
@@ -220,15 +233,7 @@ impl Engine {
         }
 
         // Routing matrix.
-        for strip in &self.app.strips {
-            for (bus_id, on) in &strip.routes {
-                if *on {
-                    if let Some(b) = self.app.buses.iter().find(|b| b.id == *bus_id) {
-                        self.links.set_route(&strip.out_node(), &b.in_node(), true);
-                    }
-                }
-            }
-        }
+        self.set_matrix_routes();
 
         // Meter taps (linked through the same reconciler).
         for strip in &self.app.strips {
@@ -302,6 +307,97 @@ impl Engine {
         self.bus_modules.remove(&id);
         self.load_bus_module(&b);
         self.reconcile();
+    }
+
+    // ---- profiles -----------------------------------------------------------
+
+    /// Switch to the saved profile `name`, saving the current one first.
+    ///
+    /// Same layout (see [`same_layout`]): every module, link and meter tap is
+    /// kept and only parameters and routes change, so apps playing into the
+    /// mixer never lose their device. Otherwise the graph is torn down and
+    /// rebuilt exactly as at startup, which apps hear as a device vanishing.
+    fn switch_profile(&mut self, name: &str) {
+        if !self.built || name == self.app.profile_name {
+            return;
+        }
+        let Some(p) = crate::persist::load_profile(name) else {
+            tracing::warn!("profile {name} could not be loaded; staying on {}", self.app.profile_name);
+            self.send_state(); // re-sync the frontend's optimistic menu
+            return;
+        };
+        self.save_now();
+        let was_default = self.app.take_default_output;
+
+        if same_layout(&self.app.strips, &self.app.buses, &p.strips, &p.buses) {
+            // Routes are rebuilt from the new matrix; modules and taps stay.
+            for s in &self.app.strips {
+                for b in &self.app.buses {
+                    self.links.set_route(&s.out_node(), &b.in_node(), false);
+                }
+            }
+            self.app.strips = p.strips;
+            self.app.buses = p.buses;
+            self.app.profile_name = name.to_string();
+            self.mark_hardware_online();
+            self.set_matrix_routes();
+            self.reconcile();
+            let controls: Vec<String> = self
+                .app
+                .strips
+                .iter()
+                .map(|s| s.control_node())
+                .chain(self.app.buses.iter().map(|b| b.in_node()))
+                .collect();
+            for node in controls {
+                self.apply_all_for(&node);
+            }
+            if p.take_default_output != was_default {
+                self.apply_default_output(p.take_default_output);
+            }
+            tracing::info!("profile {name} applied in place");
+            self.send_state();
+            self.save_now(); // records the switch in config.toml
+        } else {
+            tracing::info!("profile {name} has a different layout; rebuilding the graph");
+            if was_default && !p.take_default_output {
+                self.apply_default_output(false);
+            }
+            self.teardown();
+            self.app.strips = p.strips;
+            self.app.buses = p.buses;
+            self.app.take_default_output = p.take_default_output;
+            self.app.profile_name = name.to_string();
+            self.mark_hardware_online();
+            self.finish_build(); // modules, routes, taps, default output, state, save
+        }
+    }
+
+    /// Unload every module, meter tap and link so `finish_build` can start
+    /// from nothing. Node names are reused by the rebuild, so stale proxies
+    /// must go too or params would be sent to dead nodes.
+    fn teardown(&mut self) {
+        self.built = false; // pauses the meter drain and autosave meanwhile
+        self.links.clear();
+        self.strip_taps.clear();
+        self.bus_taps.clear();
+        self.strip_modules.clear();
+        self.bus_modules.clear();
+        self.nodes.clear();
+        self.wanted_controls.clear();
+    }
+
+    /// Desired strip -> bus links for the current routing matrix.
+    fn set_matrix_routes(&mut self) {
+        for strip in &self.app.strips {
+            for (bus_id, on) in &strip.routes {
+                if *on {
+                    if let Some(b) = self.app.buses.iter().find(|b| b.id == *bus_id) {
+                        self.links.set_route(&strip.out_node(), &b.in_node(), true);
+                    }
+                }
+            }
+        }
     }
 
     fn first_node(&self, class: &str) -> Option<String> {
@@ -585,6 +681,40 @@ impl Engine {
                 }
                 self.meters_on = on;
             }
+            EngineCommand::LoadProfile { name } => self.switch_profile(&name),
+            EngineCommand::SaveProfileAs { name } => {
+                if !crate::persist::valid_profile_name(&name) {
+                    tracing::warn!("refusing profile name {name:?}");
+                    return;
+                }
+                self.save_now(); // flush the profile we are leaving
+                self.app.profile_name = name;
+                self.save_now(); // write the copy and record it in config.toml
+                self.send_state();
+            }
+            EngineCommand::RenameProfile { from, to } => {
+                let active = from == self.app.profile_name;
+                if active {
+                    self.save_now(); // the file on disk must be current before it moves
+                }
+                match crate::persist::rename_profile(&from, &to) {
+                    Ok(()) if active => {
+                        self.app.profile_name = to;
+                        self.save_now();
+                    }
+                    Ok(()) => {}
+                    Err(e) => tracing::warn!("rename profile {from:?} -> {to:?} failed: {e}"),
+                }
+                self.send_state();
+            }
+            EngineCommand::DeleteProfile { name } => {
+                if name == self.app.profile_name {
+                    tracing::warn!("refusing to delete the active profile {name:?}");
+                } else if let Err(e) = crate::persist::delete_profile(&name) {
+                    tracing::warn!("delete profile {name:?} failed: {e}");
+                }
+                self.send_state();
+            }
             EngineCommand::Shutdown => unreachable!("handled by caller"),
         }
     }
@@ -656,6 +786,17 @@ fn bus(id: BusId, label: &str, target: Option<String>) -> BusState {
         delay_ms: 0.0,
         eq: EqParams::default(),
     }
+}
+
+/// Whether two mixers can share one live graph: the same strips (id, kind,
+/// capture device, in order — meter frames are indexed by position) and the
+/// same buses (id, output device). Labels, levels, DSP and routes may differ;
+/// those are applied as params. Anything else needs modules reloaded.
+fn same_layout(a_strips: &[StripState], a_buses: &[BusState], b_strips: &[StripState], b_buses: &[BusState]) -> bool {
+    a_strips.len() == b_strips.len()
+        && a_buses.len() == b_buses.len()
+        && a_strips.iter().zip(b_strips).all(|(a, b)| a.id == b.id && a.kind == b.kind && a.hw_key == b.hw_key)
+        && a_buses.iter().zip(b_buses).all(|(a, b)| a.id == b.id && a.target_hw_key == b.target_hw_key)
 }
 
 /// NaN (or anything else non-finite) becomes 0 rather than poisoning the
@@ -878,4 +1019,68 @@ fn parse_default_name(value: &str) -> Option<String> {
         .get("name")?
         .as_str()
         .map(String::from)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn strip(id: StripId, kind: StripKind, hw: Option<&str>) -> StripState {
+        StripState {
+            id,
+            kind,
+            label: format!("Strip {id}"),
+            hw_key: hw.map(String::from),
+            online: true,
+            gain_db: 0.0,
+            mute: false,
+            solo: false,
+            routes: routes(&[BusId::A1]),
+            gate: GateParams::default(),
+            comp: CompParams::default(),
+            eq: EqParams::default(),
+        }
+    }
+
+    fn layout() -> (Vec<StripState>, Vec<BusState>) {
+        (
+            vec![strip(1, StripKind::Hardware, Some("alsa_input.mic")), strip(2, StripKind::Virtual, None)],
+            vec![bus(BusId::A1, "Speakers", Some("alsa_output.a".into())), bus(BusId::B1, "Mic", None)],
+        )
+    }
+
+    /// The common case — same rig, different settings — must switch live.
+    #[test]
+    fn settings_routes_and_labels_do_not_change_the_layout() {
+        let (s, b) = layout();
+        let (mut s2, mut b2) = layout();
+        s2[0].gain_db = -12.0;
+        s2[0].mute = true;
+        s2[1].label = "Game".into();
+        s2[1].routes = routes(&[BusId::A1, BusId::B1]);
+        s2[1].eq.enabled = true;
+        b2[0].delay_ms = 40.0;
+        b2[0].limiter.enabled = false;
+        assert!(same_layout(&s, &b, &s2, &b2));
+    }
+
+    /// Anything a module is built from forces a rebuild.
+    #[test]
+    fn devices_kinds_ids_and_counts_change_the_layout() {
+        let (s, b) = layout();
+        let mutations: Vec<(&str, Box<dyn Fn(&mut Vec<StripState>, &mut Vec<BusState>)>)> = vec![
+            ("capture device", Box::new(|s, _| s[0].hw_key = Some("alsa_input.other".into()))),
+            ("strip kind", Box::new(|s, _| s[1].kind = StripKind::Hardware)),
+            ("strip id", Box::new(|s, _| s[1].id = 9)),
+            ("extra strip", Box::new(|s, _| s.push(strip(3, StripKind::Virtual, None)))),
+            ("strip order", Box::new(|s, _| s.swap(0, 1))),
+            ("bus output device", Box::new(|_, b| b[0].target_hw_key = Some("alsa_output.b".into()))),
+            ("bus removed", Box::new(|_, b| { b.pop(); })),
+        ];
+        for (what, mutate) in mutations {
+            let (mut s2, mut b2) = layout();
+            mutate(&mut s2, &mut b2);
+            assert!(!same_layout(&s, &b, &s2, &b2), "a different {what} must rebuild");
+        }
+    }
 }
