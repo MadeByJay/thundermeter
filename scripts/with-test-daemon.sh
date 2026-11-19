@@ -5,7 +5,7 @@
 # standing in for a sound card. It listens on its own socket inside a temp
 # runtime dir, so nothing here can see — or disturb — the user's real audio
 # session. XDG_CONFIG_HOME is redirected too, so tests never touch
-# ~/.config/linuxmeeter.
+# ~/.config/thundermeter.
 #
 #   scripts/with-test-daemon.sh cargo test -p lm-engine --test audio -- --ignored
 set -euo pipefail
@@ -15,7 +15,7 @@ if ! command -v pipewire >/dev/null 2>&1; then
     exit 127
 fi
 
-DIR=$(mktemp -d "${TMPDIR:-/tmp}/linuxmeeter-test.XXXXXX")
+DIR=$(mktemp -d "${TMPDIR:-/tmp}/thundermeter-test.XXXXXX")
 DAEMON_PID=""
 
 cleanup() {
@@ -33,7 +33,7 @@ chmod 700 "$DIR/run"
 # Drop-in over the distro's stock pipewire.conf: fixed clock (so metering maths
 # are predictable) plus one null sink named alsa_output.* — the engine only
 # treats alsa_/bluez_ nodes as real devices.
-cat > "$DIR/config/pipewire/pipewire.conf.d/10-linuxmeeter-test.conf" <<'EOF'
+cat > "$DIR/config/pipewire/pipewire.conf.d/10-thundermeter-test.conf" <<'EOF'
 context.properties = {
     default.clock.rate        = 48000
     default.clock.quantum     = 1024
@@ -45,7 +45,7 @@ context.objects = [
       args = {
         factory.name     = support.null-audio-sink
         node.name        = "alsa_output.lm-test-sink"
-        node.description = "linuxmeeter test sink"
+        node.description = "thundermeter test sink"
         media.class      = Audio/Sink
         audio.position   = [ FL FR ]
         object.linger    = true
@@ -66,7 +66,7 @@ EOF
 # configure its own ports, for the same reason.
 for conf in client.conf.d client-rt.conf.d; do
     mkdir -p "$DIR/config/pipewire/$conf"
-    cat > "$DIR/config/pipewire/$conf/10-linuxmeeter-test.conf" <<'EOF'
+    cat > "$DIR/config/pipewire/$conf/10-thundermeter-test.conf" <<'EOF'
 stream.properties = {
     adapter.auto-port-config = { mode = dsp, monitor = false, control = false, position = preserve }
 }

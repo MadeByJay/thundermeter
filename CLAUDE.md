@@ -21,7 +21,7 @@ make app          # full app against the live PipeWire graph
 make test         # Rust + frontend unit tests (no audio system needed)
 make test-audio   # integration tests against a private throwaway PipeWire daemon
 make check        # svelte-check + cargo check --workspace --all-targets
-make build        # release binary -> target/release/linuxmeeter
+make build        # release binary -> target/release/thundermeter
 make graph        # headless REPL: full topology — `route a1 0|1`, `links`, `meters 1`, `q`
 make spike        # headless REPL: one strip, raw param pokes — `set comp:cr 8`, `vol 0.5`, `q`
 ```
@@ -49,7 +49,7 @@ the EQ response curve.
 **`make test-audio` — real PipeWire, real LSP plugins, real samples.**
 `scripts/with-test-daemon.sh` starts a *private* daemon: its own socket in a temp runtime
 dir, one null sink, no session manager, `XDG_CONFIG_HOME` redirected so profiles never
-touch `~/.config/linuxmeeter`. `crates/lm-engine/tests/audio.rs` then builds the
+touch `~/.config/thundermeter`. `crates/lm-engine/tests/audio.rs` then builds the
 production signal path out of the engine's own parts — tone → strip (gate/comp/EQ) →
 routing matrix → bus (limiter) → sink, with meter taps — and asserts on measured dBFS.
 A 0.5-amplitude sine must arrive at −6.02 dBFS peak / −9.03 RMS; `-12 dB` of gain must
@@ -209,7 +209,7 @@ Eight EQ bands per strip, split by owner: **bands 0–3** are the user-facing EQ
 
 ### Persistence
 
-TOML under `~/.config/linuxmeeter/`: `config.toml` (last profile) and
+TOML under `~/.config/thundermeter/`: `config.toml` (last profile) and
 `profiles/<name>.toml`, written atomically. Saves are debounced on a 5 s engine timer
 plus on shutdown. `sanitize()` clears state that must not survive a restart (solo,
 `online`).
@@ -224,7 +224,7 @@ plus on shutdown. `sanitize()` clears state that must not survive a restart (sol
 - Tauri 2 window APIs silently no-op without `src-tauri/capabilities/default.json`
   granting `core:window:allow-*`. Don't remove or trim that file.
 - WebKitGTK caches Vite modules across dev-server restarts and renders the UI unstyled;
-  `beforeDevCommand` in `tauri.conf.json` wipes `~/.local/share/com.stacksloth.linuxmeeter/WebKitCache`
+  `beforeDevCommand` in `tauri.conf.json` wipes `~/.local/share/io.github.madebyjay.thundermeter/WebKitCache`
   for that reason. `make clean-cache` does it by hand.
 - The Tauri dev watcher does not reliably restart after an external `cargo build` —
   restart `make app` after Rust changes when behavior looks stale.

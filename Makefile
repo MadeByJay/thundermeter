@@ -1,4 +1,4 @@
-# linuxmeeter — see CLAUDE.md / README.md for what these do and why.
+# thundermeter — see CLAUDE.md / README.md for what these do and why.
 # Every target is phony; the real build systems (pnpm, cargo) do the tracking.
 
 PNPM  ?= pnpm
@@ -33,7 +33,7 @@ app: ## Full app against the live PipeWire graph
 	RUST_LOG=$(LOG) $(PNPM) tauri dev
 
 run: ## Run the already-built release binary
-	RUST_LOG=$(LOG) ./target/release/linuxmeeter
+	RUST_LOG=$(LOG) ./target/release/thundermeter
 
 # ---- headless engine REPLs (no UI; drive real audio) ------------------------
 
@@ -80,31 +80,31 @@ fmt-check: ## Verify Rust formatting without writing
 
 # ---- building --------------------------------------------------------------
 
-build: ## Release binary at target/release/linuxmeeter
+build: ## Release binary at target/release/thundermeter
 	$(PNPM) tauri build --no-bundle
 
 install-app: build ## Install binary + desktop entry + icons into PREFIX (default ~/.local)
-	install -Dm755 target/release/linuxmeeter $(DESTDIR)$(PREFIX)/bin/linuxmeeter
-	install -Dm644 packaging/linuxmeeter.desktop $(DESTDIR)$(PREFIX)/share/applications/linuxmeeter.desktop
-	install -Dm644 src-tauri/icons/icon.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/512x512/apps/linuxmeeter.png
-	install -Dm644 src-tauri/icons/128x128.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/128x128/apps/linuxmeeter.png
-	install -Dm644 src-tauri/icons/32x32.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/32x32/apps/linuxmeeter.png
+	install -Dm755 target/release/thundermeter $(DESTDIR)$(PREFIX)/bin/thundermeter
+	install -Dm644 packaging/thundermeter.desktop $(DESTDIR)$(PREFIX)/share/applications/thundermeter.desktop
+	install -Dm644 src-tauri/icons/icon.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/512x512/apps/thundermeter.png
+	install -Dm644 src-tauri/icons/128x128.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/128x128/apps/thundermeter.png
+	install -Dm644 src-tauri/icons/32x32.png $(DESTDIR)$(PREFIX)/share/icons/hicolor/32x32/apps/thundermeter.png
 	@command -v update-desktop-database >/dev/null 2>&1 \
 		&& update-desktop-database -q "$(DESTDIR)$(PREFIX)/share/applications" || true
 	@command -v gtk-update-icon-cache >/dev/null 2>&1 \
 		&& gtk-update-icon-cache -qtf "$(DESTDIR)$(PREFIX)/share/icons/hicolor" || true
-	@echo "  installed -> $(DESTDIR)$(PREFIX)/bin/linuxmeeter"
+	@echo "  installed -> $(DESTDIR)$(PREFIX)/bin/thundermeter"
 	@case ":$$PATH:" in \
 		*":$(PREFIX)/bin:"*) ;; \
 		*) printf '  \033[1;33mnote\033[0m %s is not on your PATH — add it to your shell rc\n' '$(PREFIX)/bin' ;; \
 	esac
 
 uninstall-app: ## Remove what install-app placed under PREFIX
-	rm -f $(DESTDIR)$(PREFIX)/bin/linuxmeeter
-	rm -f $(DESTDIR)$(PREFIX)/share/applications/linuxmeeter.desktop
-	rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/512x512/apps/linuxmeeter.png
-	rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/128x128/apps/linuxmeeter.png
-	rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/32x32/apps/linuxmeeter.png
+	rm -f $(DESTDIR)$(PREFIX)/bin/thundermeter
+	rm -f $(DESTDIR)$(PREFIX)/share/applications/thundermeter.desktop
+	rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/512x512/apps/thundermeter.png
+	rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/128x128/apps/thundermeter.png
+	rm -f $(DESTDIR)$(PREFIX)/share/icons/hicolor/32x32/apps/thundermeter.png
 	@command -v update-desktop-database >/dev/null 2>&1 \
 		&& update-desktop-database -q "$(DESTDIR)$(PREFIX)/share/applications" || true
 	@echo "  removed from $(DESTDIR)$(PREFIX)"
@@ -116,4 +116,4 @@ clean: ## Remove build artifacts (target/, dist/)
 	rm -rf dist
 
 clean-cache: ## Wipe the WebKitGTK module cache (unstyled-UI fix)
-	rm -rf ~/.local/share/com.stacksloth.linuxmeeter/WebKitCache
+	rm -rf ~/.local/share/io.github.madebyjay.thundermeter/WebKitCache

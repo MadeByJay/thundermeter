@@ -1,10 +1,11 @@
-# Maintainer: Daniel Slapelis <dan@stacksloth.com>
-pkgname=linuxmeeter-git
+# Maintainer: MadeByJay <https://github.com/MadeByJay>
+# Contributor: Daniel Slapelis <dan@stacksloth.com> (linuxmeeter, the upstream project)
+pkgname=thundermeter-git
 pkgver=r10
 pkgrel=1
-pkgdesc="VoiceMeeter-style virtual audio mixer for PipeWire (Tauri + Svelte)"
+pkgdesc="VoiceMeeter-style virtual audio mixer for PipeWire (Tauri + Svelte); fork of linuxmeeter"
 arch=(x86_64)
-url="https://github.com/dslapelis/linuxmeeter"
+url="https://github.com/MadeByJay/thundermeter"
 license=(GPL-3.0-or-later)
 depends=(
   pipewire
@@ -21,8 +22,8 @@ makedepends=(
   pnpm
   pkgconf
 )
-provides=(linuxmeeter)
-conflicts=(linuxmeeter)
+provides=(thundermeter)
+conflicts=(thundermeter)
 # makepkg's default `lto` option puts -flto=auto into CFLAGS; the cc crate then
 # builds libspa's C shim as GCC LTO bitcode, which rust's lld linker cannot read
 # (undefined symbol: spa_format_audio_raw_parse_libspa_rs).
@@ -43,9 +44,9 @@ build() {
 
 package() {
   cd "$pkgname"
-  install -Dm755 target/release/linuxmeeter "$pkgdir/usr/bin/linuxmeeter"
-  install -Dm644 packaging/linuxmeeter.desktop "$pkgdir/usr/share/applications/linuxmeeter.desktop"
-  install -Dm644 src-tauri/icons/icon.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/linuxmeeter.png"
-  install -Dm644 src-tauri/icons/128x128.png "$pkgdir/usr/share/icons/hicolor/128x128/apps/linuxmeeter.png"
-  install -Dm644 src-tauri/icons/32x32.png "$pkgdir/usr/share/icons/hicolor/32x32/apps/linuxmeeter.png"
+  install -Dm755 target/release/thundermeter "$pkgdir/usr/bin/thundermeter"
+  install -Dm644 packaging/thundermeter.desktop "$pkgdir/usr/share/applications/thundermeter.desktop"
+  install -Dm644 src-tauri/icons/icon.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/thundermeter.png"
+  install -Dm644 src-tauri/icons/128x128.png "$pkgdir/usr/share/icons/hicolor/128x128/apps/thundermeter.png"
+  install -Dm644 src-tauri/icons/32x32.png "$pkgdir/usr/share/icons/hicolor/32x32/apps/thundermeter.png"
 }

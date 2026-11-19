@@ -27,14 +27,14 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -- window-drag surface, not a semantic control -->
 <header class="topbar" {onpointerdown}>
-  <div class="wordmark">LINUXMEETER</div>
+  <div class="wordmark">THUNDERMETER</div>
   <div class="center">
     <ProfileMenu />
     <button
       class="toggle"
       class:active={mixer.takeDefaultOutput}
       aria-pressed={mixer.takeDefaultOutput}
-      title="Route all desktop audio through the System strip (makes linuxmeeter the default output device)"
+      title="Route all desktop audio through the System strip (makes thundermeter the default output device)"
       onclick={() => mixer.setDefaultOutput(!mixer.takeDefaultOutput)}
     >
       DEFAULT OUT
@@ -43,7 +43,7 @@
       class="toggle"
       class:active={autostart}
       aria-pressed={autostart}
-      title="Start linuxmeeter (minimized to tray) at login so virtual devices always exist"
+      title="Start thundermeter (minimized to tray) at login so virtual devices always exist"
       onclick={toggleAutostart}
     >
       AUTOSTART

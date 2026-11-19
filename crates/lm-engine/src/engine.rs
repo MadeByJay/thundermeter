@@ -821,6 +821,7 @@ fn run(
     cmd_rx: pipewire::channel::Receiver<EngineCommand>,
     evt_tx: mpsc::Sender<EngineEvent>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    crate::persist::migrate_from_linuxmeeter();
     pipewire::init();
     let mainloop = MainLoopRc::new(None)?;
     let context = ContextRc::new(&mainloop, None)?;

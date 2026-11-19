@@ -1,4 +1,4 @@
-//! Profile persistence: TOML under `$XDG_CONFIG_HOME/linuxmeeter/`.
+//! Profile persistence: TOML under `$XDG_CONFIG_HOME/thundermeter/`.
 //!
 //! `config.toml` holds app-level settings (currently the last profile name);
 //! `profiles/<name>.toml` holds everything needed to rebuild the mixer.
@@ -30,11 +30,47 @@ impl Default for Config {
     }
 }
 
-pub fn config_dir() -> PathBuf {
+fn xdg_config_home() -> PathBuf {
     std::env::var_os("XDG_CONFIG_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(std::env::var_os("HOME").expect("HOME not set")).join(".config"))
-        .join("linuxmeeter")
+}
+
+pub fn config_dir() -> PathBuf {
+    xdg_config_home().join("thundermeter")
+}
+
+/// First launch after the rename from linuxmeeter: copy its settings across
+/// so the mixer comes up exactly as it was. A copy, not a move, so upstream
+/// linuxmeeter keeps working from its own folder. Does nothing once
+/// `~/.config/thundermeter` exists.
+pub fn migrate_from_linuxmeeter() {
+    match copy_legacy_config(&xdg_config_home().join("linuxmeeter"), &config_dir()) {
+        Ok(true) => tracing::info!("copied settings from ~/.config/linuxmeeter"),
+        Ok(false) => {}
+        Err(e) => tracing::warn!("could not copy linuxmeeter settings: {e}"),
+    }
+}
+
+/// Copies `config.toml` and `profiles/*.toml` from `old` into a not-yet-
+/// existing `new`. Returns whether anything was copied.
+fn copy_legacy_config(old: &std::path::Path, new: &std::path::Path) -> io::Result<bool> {
+    if new.exists() || !old.is_dir() {
+        return Ok(false);
+    }
+    fs::create_dir_all(new.join("profiles"))?;
+    if old.join("config.toml").is_file() {
+        fs::copy(old.join("config.toml"), new.join("config.toml"))?;
+    }
+    if let Ok(entries) = fs::read_dir(old.join("profiles")) {
+        for e in entries.filter_map(|e| e.ok()) {
+            let path = e.path();
+            if path.extension().is_some_and(|x| x == "toml") && path.is_file() {
+                fs::copy(&path, new.join("profiles").join(e.file_name()))?;
+            }
+        }
+    }
+    Ok(true)
 }
 
 pub fn load_config() -> Config {
@@ -448,6 +484,30 @@ releaseMs = 50.0
     fn config_dir_lives_under_xdg_config_home() {
         // Uses whatever the environment says; assert the shape, not the value.
         let dir = config_dir();
-        assert!(dir.ends_with("linuxmeeter"), "got {}", dir.display());
+        assert!(dir.ends_with("thundermeter"), "got {}", dir.display());
+    }
+
+    /// The first thundermeter launch picks up linuxmeeter's profiles; later
+    /// launches never overwrite thundermeter's own settings with them.
+    #[test]
+    fn linuxmeeter_settings_are_copied_once() {
+        let root = scratch_dir("migrate");
+        let (old, new) = (root.join("linuxmeeter"), root.join("thundermeter"));
+        fs::create_dir_all(old.join("profiles")).unwrap();
+        fs::write(old.join("config.toml"), "last_profile = \"Gaming\"\n").unwrap();
+        fs::write(old.join("profiles/Gaming.toml"), "g").unwrap();
+        fs::write(old.join("profiles/half.toml.tmp"), "partial").unwrap();
+
+        assert!(copy_legacy_config(&old, &new).unwrap());
+        assert_eq!(fs::read_to_string(new.join("profiles/Gaming.toml")).unwrap(), "g");
+        assert!(fs::read_to_string(new.join("config.toml")).unwrap().contains("Gaming"));
+        assert!(!new.join("profiles/half.toml.tmp").exists(), "interrupted writes are not carried over");
+        assert!(old.join("profiles/Gaming.toml").exists(), "a copy: linuxmeeter keeps its own settings");
+
+        fs::write(new.join("profiles/Gaming.toml"), "changed in thundermeter").unwrap();
+        assert!(!copy_legacy_config(&old, &new).unwrap(), "only on first launch");
+        assert_eq!(fs::read_to_string(new.join("profiles/Gaming.toml")).unwrap(), "changed in thundermeter");
+        assert!(!copy_legacy_config(&root.join("never-installed"), &root.join("fresh")).unwrap());
+        fs::remove_dir_all(&root).unwrap();
     }
 }

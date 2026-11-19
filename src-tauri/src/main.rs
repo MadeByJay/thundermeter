@@ -130,7 +130,7 @@ fn autostart_path() -> std::path::PathBuf {
         .unwrap_or_else(|| {
             std::path::PathBuf::from(std::env::var_os("HOME").expect("HOME not set")).join(".config")
         })
-        .join("autostart/linuxmeeter.desktop")
+        .join("autostart/thundermeter.desktop")
 }
 
 #[tauri::command]
@@ -144,7 +144,7 @@ fn set_autostart(on: bool) -> Result<(), String> {
     if on {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
         let entry = format!(
-            "[Desktop Entry]\nType=Application\nName=linuxmeeter\nComment=Virtual audio mixer\nExec={} --minimized\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
+            "[Desktop Entry]\nType=Application\nName=thundermeter\nComment=Virtual audio mixer\nExec={} --minimized\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
             exe.display()
         );
         if let Some(dir) = path.parent() {
@@ -223,7 +223,7 @@ fn main() {
             let menu = tauri::menu::Menu::with_items(app, &[&show, &quit])?;
             tauri::tray::TrayIconBuilder::with_id("main")
                 .icon(app.default_window_icon().expect("window icon").clone())
-                .tooltip("linuxmeeter")
+                .tooltip("thundermeter")
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(|app, event| match event.id.as_ref() {
@@ -258,7 +258,7 @@ fn main() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error building linuxmeeter")
+        .expect("error building thundermeter")
         .run(move |_app, event| {
             if let tauri::RunEvent::Exit = event {
                 // Graceful engine shutdown -> modules unload -> zero lm.* nodes left.

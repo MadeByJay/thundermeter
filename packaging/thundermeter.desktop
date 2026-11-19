@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=linuxmeeter
+Name=thundermeter
 GenericName=Virtual Audio Mixer
 Comment=VoiceMeeter-style virtual audio mixer for PipeWire
-Exec=linuxmeeter
-Icon=linuxmeeter
+Exec=thundermeter
+Icon=thundermeter
 Terminal=false
 Categories=AudioVideo;Audio;Mixer;
 Keywords=audio;mixer;pipewire;voicemeeter;microphone;stream;
-StartupWMClass=linuxmeeter
+StartupWMClass=thundermeter

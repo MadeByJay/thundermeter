@@ -1,4 +1,4 @@
-/** Profile names become file names in ~/.config/linuxmeeter/profiles/.
+/** Profile names become file names in ~/.config/thundermeter/profiles/.
  *  Mirrors `persist::valid_profile_name` in lm-engine — the engine refuses
  *  anything this rejects, so the menu checks first and can say why. */
 export const MAX_PROFILE_NAME = 48;
