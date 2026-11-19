@@ -102,6 +102,11 @@ function findStrip(id: number): StripState | undefined {
 
 let mockAutostart = false;
 
+/** Deep copy of IPC arguments. Not structuredClone: params built from Svelte
+ *  $state carry reactive proxies, which structuredClone refuses (the Tauri
+ *  path serializes to JSON, so this matches what the real backend receives). */
+const plainCopy = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+
 const meterSubs = new Set<(f: MeterFrame) => void>();
 const stateSubs = new Set<(s: AppState) => void>();
 let seq = 0;
@@ -176,7 +181,7 @@ export const mockIpc: Ipc = {
   },
   setEqParams: (stripId, params) => {
     const s = findStrip(stripId);
-    if (s) s.eq = structuredClone(params);
+    if (s) s.eq = plainCopy(params);
     return Promise.resolve();
   },
   setLimiterParams: (bus, params) => {
